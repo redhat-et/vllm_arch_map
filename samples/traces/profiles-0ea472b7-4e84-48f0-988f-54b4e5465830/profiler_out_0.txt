@@ -1,0 +1,107 @@
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                               aten::mm         0.37%       4.575ms         0.58%       7.235ms      12.475us     288.829ms        98.52%     288.829ms     497.981us           580  
+std::enable_if<!(false), void>::type internal::gemvx...         0.00%       0.000us         0.00%       0.000us       0.000us     170.195ms        58.05%     170.195ms     773.616us           220  
+std::enable_if<!(false), void>::type internal::gemvx...         0.00%       0.000us         0.00%       0.000us       0.000us      54.393ms        18.55%      54.393ms     251.820us           216  
+void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_...         0.00%       0.000us         0.00%       0.000us       0.000us      32.698ms        11.15%      32.698ms     908.283us            36  
+void cutlass::Kernel2<cutlass_80_wmma_tensorop_bf16_...         0.00%       0.000us         0.00%       0.000us       0.000us      31.542ms        10.76%      31.542ms     292.060us           108  
+                                Module:logits_processor         0.00%       0.000us         0.00%       0.000us       0.000us      28.590ms         9.75%      28.590ms       7.148ms             4  
+                Module:model.layers.30.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.799ms         1.30%       3.799ms     949.648us             4  
+                Module:model.layers.16.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.708ms         1.26%       3.708ms     926.896us             4  
+                Module:model.layers.18.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.706ms         1.26%       3.706ms     926.472us             4  
+                Module:model.layers.14.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.697ms         1.26%       3.697ms     924.304us             4  
+                Module:model.layers.32.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.663ms         1.25%       3.663ms     915.632us             4  
+                Module:model.layers.25.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.580ms         1.22%       3.580ms     894.976us             4  
+                Module:model.layers.19.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.560ms         1.21%       3.560ms     889.968us             4  
+                Module:model.layers.33.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.541ms         1.21%       3.541ms     885.144us             4  
+                 Module:model.layers.0.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.534ms         1.21%       3.534ms     883.568us             4  
+                 Module:model.layers.4.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.533ms         1.20%       3.533ms     883.176us             4  
+                Module:model.layers.17.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.518ms         1.20%       3.518ms     879.456us             4  
+                Module:model.layers.13.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.513ms         1.20%       3.513ms     878.352us             4  
+                 Module:model.layers.1.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.505ms         1.20%       3.505ms     876.232us             4  
+                Module:model.layers.29.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.504ms         1.20%       3.504ms     876.040us             4  
+                 Module:model.layers.2.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.499ms         1.19%       3.499ms     874.632us             4  
+                Module:model.layers.24.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.495ms         1.19%       3.495ms     873.800us             4  
+                 Module:model.layers.6.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.495ms         1.19%       3.495ms     873.640us             4  
+                 Module:model.layers.7.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.493ms         1.19%       3.493ms     873.240us             4  
+                 Module:model.layers.5.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.487ms         1.19%       3.487ms     871.744us             4  
+                Module:model.layers.23.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.486ms         1.19%       3.486ms     871.448us             4  
+                Module:model.layers.15.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.484ms         1.19%       3.484ms     870.976us             4  
+                 Module:model.layers.9.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.473ms         1.18%       3.473ms     868.208us             4  
+                 Module:model.layers.8.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.468ms         1.18%       3.468ms     867.048us             4  
+                Module:model.layers.12.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.467ms         1.18%       3.467ms     866.816us             4  
+                Module:model.layers.28.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.467ms         1.18%       3.467ms     866.816us             4  
+                Module:model.layers.22.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.463ms         1.18%       3.463ms     865.696us             4  
+                Module:model.layers.21.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.460ms         1.18%       3.460ms     864.896us             4  
+                 Module:model.layers.3.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.446ms         1.18%       3.446ms     861.616us             4  
+                Module:model.layers.11.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.444ms         1.17%       3.444ms     861.000us             4  
+                Module:model.layers.27.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.444ms         1.17%       3.444ms     861.000us             4  
+                Module:model.layers.20.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.434ms         1.17%       3.434ms     858.464us             4  
+                Module:model.layers.10.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.428ms         1.17%       3.428ms     856.896us             4  
+                Module:model.layers.26.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.427ms         1.17%       3.427ms     856.768us             4  
+                Module:model.layers.34.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.419ms         1.17%       3.419ms     854.760us             4  
+                Module:model.layers.31.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.397ms         1.16%       3.397ms     849.368us             4  
+                Module:model.layers.35.mlp.gate_up_proj         0.00%       0.000us         0.00%       0.000us       0.000us       3.386ms         1.16%       3.386ms     846.600us             4  
+                   Module:model.layers.16.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       2.008ms         0.68%       2.008ms     501.952us             4  
+                   Module:model.layers.14.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.911ms         0.65%       1.911ms     477.712us             4  
+                    Module:model.layers.3.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.848ms         0.63%       1.848ms     461.984us             4  
+                   Module:model.layers.10.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.836ms         0.63%       1.836ms     458.920us             4  
+                   Module:model.layers.28.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.826ms         0.62%       1.826ms     456.504us             4  
+                   Module:model.layers.13.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.824ms         0.62%       1.824ms     455.952us             4  
+                   Module:model.layers.15.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.822ms         0.62%       1.822ms     455.552us             4  
+                    Module:model.layers.0.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.818ms         0.62%       1.818ms     454.624us             4  
+                   Module:model.layers.11.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.813ms         0.62%       1.813ms     453.304us             4  
+                   Module:model.layers.26.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.812ms         0.62%       1.812ms     453.112us             4  
+                   Module:model.layers.12.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.811ms         0.62%       1.811ms     452.656us             4  
+                   Module:model.layers.31.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.809ms         0.62%       1.809ms     452.344us             4  
+                    Module:model.layers.2.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.809ms         0.62%       1.809ms     452.240us             4  
+                   Module:model.layers.29.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.807ms         0.62%       1.807ms     451.664us             4  
+                   Module:model.layers.25.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.806ms         0.62%       1.806ms     451.592us             4  
+                    Module:model.layers.5.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.805ms         0.62%       1.805ms     451.248us             4  
+                   Module:model.layers.33.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.804ms         0.62%       1.804ms     451.112us             4  
+                    Module:model.layers.9.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.804ms         0.62%       1.804ms     450.960us             4  
+                   Module:model.layers.30.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.797ms         0.61%       1.797ms     449.296us             4  
+                   Module:model.layers.21.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.797ms         0.61%       1.797ms     449.264us             4  
+                   Module:model.layers.24.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.795ms         0.61%       1.795ms     448.840us             4  
+                    Module:model.layers.6.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.794ms         0.61%       1.794ms     448.608us             4  
+                   Module:model.layers.19.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.794ms         0.61%       1.794ms     448.560us             4  
+                    Module:model.layers.1.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.792ms         0.61%       1.792ms     448.008us             4  
+                   Module:model.layers.17.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.790ms         0.61%       1.790ms     447.504us             4  
+                   Module:model.layers.23.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.788ms         0.61%       1.788ms     447.080us             4  
+                   Module:model.layers.27.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.788ms         0.61%       1.788ms     446.896us             4  
+                   Module:model.layers.20.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.786ms         0.61%       1.786ms     446.424us             4  
+                    Module:model.layers.7.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.781ms         0.61%       1.781ms     445.368us             4  
+                   Module:model.layers.18.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.780ms         0.61%       1.780ms     445.008us             4  
+                   Module:model.layers.34.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.776ms         0.61%       1.776ms     444.000us             4  
+                    Module:model.layers.8.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.776ms         0.61%       1.776ms     443.944us             4  
+                   Module:model.layers.32.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.772ms         0.60%       1.772ms     442.880us             4  
+                   Module:model.layers.22.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.769ms         0.60%       1.769ms     442.280us             4  
+                    Module:model.layers.4.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.762ms         0.60%       1.762ms     440.416us             4  
+                   Module:model.layers.35.mlp.down_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.722ms         0.59%       1.722ms     430.569us             4  
+              Module:model.layers.27.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.251ms         0.43%       1.251ms     312.632us             4  
+              Module:model.layers.25.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.248ms         0.43%       1.248ms     312.096us             4  
+                   execute_context_1(6)_generation_0(0)         0.00%       0.000us         0.00%       0.000us       0.000us       1.242ms         0.42%       1.242ms       1.242ms             1  
+              Module:model.layers.17.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.237ms         0.42%       1.237ms     309.360us             4  
+               Module:model.layers.0.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.184ms         0.40%       1.184ms     296.000us             4  
+              Module:model.layers.16.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.170ms         0.40%       1.170ms     292.584us             4  
+               Module:model.layers.2.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.156ms         0.39%       1.156ms     289.040us             4  
+               Module:model.layers.1.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.154ms         0.39%       1.154ms     288.393us             4  
+               Module:model.layers.3.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.149ms         0.39%       1.149ms     287.152us             4  
+              Module:model.layers.18.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.148ms         0.39%       1.148ms     286.880us             4  
+              Module:model.layers.29.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.147ms         0.39%       1.147ms     286.712us             4  
+               Module:model.layers.5.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.144ms         0.39%       1.144ms     285.960us             4  
+               Module:model.layers.4.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.142ms         0.39%       1.142ms     285.472us             4  
+              Module:model.layers.21.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.139ms         0.39%       1.139ms     284.712us             4  
+               Module:model.layers.7.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.139ms         0.39%       1.139ms     284.632us             4  
+               Module:model.layers.6.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.137ms         0.39%       1.137ms     284.136us             4  
+               Module:model.layers.8.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.136ms         0.39%       1.136ms     283.968us             4  
+              Module:model.layers.11.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.134ms         0.39%       1.134ms     283.472us             4  
+              Module:model.layers.20.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.133ms         0.39%       1.133ms     283.304us             4  
+              Module:model.layers.32.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.133ms         0.39%       1.133ms     283.184us             4  
+              Module:model.layers.10.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.130ms         0.39%       1.130ms     282.520us             4  
+               Module:model.layers.9.self_attn.qkv_proj         0.00%       0.000us         0.00%       0.000us       0.000us       1.130ms         0.39%       1.130ms     282.520us             4  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 1.237s
+Self CUDA time total: 293.179ms
+

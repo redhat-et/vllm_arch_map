@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GPU Execution Flow</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'SF Mono','Fira Code',monospace;background:#0d1117;color:#c9d1d9}
+#hdr{padding:10px 20px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:16px}
+#hdr h1{font-size:14px;color:#58a6ff}
+#hdr .i{font-size:11px;color:#8b949e}
+#bc{padding:6px 20px;background:#0d1117;border-bottom:1px solid #21262d;font-size:12px;display:flex;gap:4px;flex-wrap:wrap}
+#bc span{cursor:pointer;color:#58a6ff}#bc span:hover{text-decoration:underline}
+#bc .c{color:#c9d1d9;cursor:default}#bc .s{color:#484f58;cursor:default}
+svg{width:100%;height:calc(100vh - 68px);display:block}
+.tt{position:fixed;background:#1c2128;border:1px solid #30363d;border-radius:6px;padding:12px 16px;font-size:10px;color:#c9d1d9;pointer-events:none;z-index:100;max-width:700px;line-height:1.4;font-family:'SF Mono','Fira Code',monospace}
+.tt .ftitle{color:#58a6ff;font-weight:bold;margin-bottom:8px;font-size:11px}
+.tt .frow{display:flex;align-items:center;gap:8px;margin:6px 0}
+.tt .finputs{display:flex;flex-direction:column;gap:4px}
+.tt .fbox{background:#161b22;border:1px solid #30363d;border-radius:4px;padding:4px 8px;font-size:9px;white-space:nowrap;line-height:1.4}
+.tt .fbox.op{border-color:#58a6ff;background:#1a2a3a;padding:8px 12px;text-align:center}
+.tt .fbox.out{border-color:#2ea043;background:#1a3a2a}
+.tt .farr{color:#58a6ff;font-size:14px;flex-shrink:0}
+.tt .fname{color:#7ee787;font-weight:bold;display:block}
+.tt .fdim{color:#c9d1d9;display:block}
+.tt .ftype{color:#8b949e;font-size:8px;display:block}
+.tt .foplabel{color:#e6edf3;font-weight:bold;display:block}
+.tt .fopgpu{color:#f0883e;font-size:8px;display:block;margin-top:2px}
+.tt .foptime{color:#8b949e;font-size:8px;display:block;margin-top:2px}
+</style>
+</head>
+<body>
+<div id="hdr"><h1 id="t">Loading...</h1><span class="i" id="inf"></span></div>
+<div id="bc"></div>
+<svg id="svg"></svg>
+<div class="tt" id="tip" style="display:none"></div>
+<script>
+let G, F, M, stk = [{id:'top'}];
+
+const C = {
+  gemm:{f:'#1a3a2a',s:'#2ea043'}, linear:{f:'#1a3a2a',s:'#2ea043'},
+  norm:{f:'#1a2a3a',s:'#58a6ff'}, attn:{f:'#2a1a3a',s:'#bc8cff'},
+  act:{f:'#3a2a1a',s:'#f0883e'}, embed:{f:'#1a3a3a',s:'#3fb9a0'},
+  kv:{f:'#3a1a2a',s:'#f778ba'}, out:{f:'#2a2a1a',s:'#d2a04a'},
+  sched:{f:'#1a1a2a',s:'#8b949e'}, rope:{f:'#2a3a1a',s:'#7ee787'},
+  resid:{f:'#161b22',s:'#30363d'}, tensor:{f:'#161b22',s:'#21262d'},
+  gpu:{f:'#3a1a1a',s:'#f85149'}, sample:{f:'#2a1a1a',s:'#d2a04a'},
+};
+const RC = {
+  gemm:C.gemm, linear:C.linear, embed_norm:C.embed, norm:C.norm,
+  rms_norm:C.norm, fused_add_rms_norm:C.norm,
+  qk_norm:C.norm, post_attn_norm:C.norm, post_mlp_norm:C.norm,
+  kv_cache:C.kv, kv_cache_write:C.kv, kv_cache_update:C.kv,
+  flash_attention:C.attn, attention_dispatch:C.attn,
+  silu_activation:C.act, silu_and_mul:C.act, softmax:C.act,
+  rotary_embedding:C.rope, rotary:C.rope,
+  embedding:C.embed, top_k:C.sample, sampling:C.sample, temperature:C.act,
+  scheduler:C.sched, index:C.sched, elementwise:C.sched,
+  post_sample:C.sched, other:C.sched,
+};
+function rc(role){ return RC[role] || C.sched; }
+
+const NM = {top:'Model Execution', layer:'Decoder Layer', step:'Kernel Step',
+  post:'Post-Layer', pre:'Pre-Layer', mod:'Module'};
+
+async function boot(){
+  try {
+    const cb = '?v=' + Date.now();
+    // Load merged file, fall back to separate files
+    try {
+      M = await d3.json('model_execution.json'+cb);
+      G = M; // model_graph fields are at top level
+      F = {gpu_chain: M, kernel_summary: M.kernel_summary, total_kernels: M.stats.total_kernels};
+    } catch(_) {
+      [G,F] = await Promise.all([d3.json('model_graph.json'+cb), d3.json('execution_flow.json'+cb)]);
+    }
+    d3.select('#t').text(G.model + ' — Model Execution');
+    if(!M.module_tree) { d3.select('#t').text('Error: module_tree missing'); return; }
+    d3.select('#inf').text(`${G.device} | ${G.dtype} | ${G.engine.attention_backend} | ${M.mode} mode | ${M.iterations} iters | ${M.layers} layers`);
+    render();
+  } catch(e) {
+    d3.select('#t').text('Error: ' + e.message);
+    console.error(e);
+  }
+}
+
+function nav(id, data){ stk.push({id, data}); render(); }
+function back(i){ stk = stk.slice(0, i+1); render(); }
+
+function render(){
+  const bc = d3.select('#bc').html('');
+  stk.forEach((v,i) => {
+    if(i) bc.append('span').classed('s',true).text(' › ');
+    let nm = NM[v.id] || v.id;
+    if(v.id === 'layer' && v.data != null) nm = `Layer ${v.data}`;
+    if(v.id === 'step' && v.data) nm = v.data.label || v.data.role;
+    if(v.id === 'mod' && v.data) nm = v.data.class + (v.data.repeat ? ` ×${v.data.repeat}` : '');
+    const s = bc.append('span').text(nm);
+    if(i < stk.length-1) s.on('click', () => back(i));
+    else s.classed('c', true);
+  });
+  const cur = stk[stk.length-1];
+  if(cur.id === 'top') vTop();
+  else if(cur.id === 'layer') vLayer(cur.data);
+  else if(cur.id === 'step') vStep(cur.data);
+  else if(cur.id === 'post') vPost();
+  else if(cur.id === 'pre') vPre();
+  else if(cur.id === 'mod') vMod(cur.data);
+}
+
+function mkG(){
+  const svg = d3.select('#svg').html('');
+  const g = svg.append('g');
+  svg.call(d3.zoom().scaleExtent([0.1,6]).on('zoom', e => g.attr('transform', e.transform)));
+  return g;
+}
+
+function tip(evt, html){
+  const t = d3.select('#tip');
+  t.html(html).style('display','block')
+    .style('left', (evt.clientX+12)+'px').style('top', (evt.clientY-10)+'px');
+}
+function tipHide(){ d3.select('#tip').style('display','none'); }
+
+function fmtUs(us){
+  if(us >= 1000) return (us/1000).toFixed(1) + 'ms';
+  return us.toFixed(1) + 'μs';
+}
+
+function fmtShape(s){ return '['+s.join(', ')+']'; }
+
+function durColor(dur, avg){
+  const ratio = dur / avg;
+  if(ratio <= 0.85) return '#2ea043';
+  if(ratio <= 1.0) return '#3fb950';
+  if(ratio <= 1.15) return '#d29922';
+  if(ratio <= 1.4) return '#e3b341';
+  return '#f85149';
+}
+
+function layerBars(g, durs, {x=0, y0=18, barW=160, onClick=null, title='Per-Layer Duration'} = {}){
+  g.append('text').attr('fill','#58a6ff').attr('font-size','11px').attr('font-weight','bold').text(title);
+  const avg = durs.reduce((s,d) => s+d, 0) / durs.length;
+  const maxDur = Math.max(...durs);
+  durs.forEach((d, i) => {
+    const y = y0 + i * 13;
+    const bw = Math.max(2, barW * d / maxDur);
+    const col = durColor(d, avg);
+    const bar = g.append('rect').attr('x',x).attr('y',y).attr('width',bw).attr('height',10)
+      .attr('rx',2).attr('fill',col).attr('fill-opacity',0.3).attr('stroke',col).attr('stroke-width',1);
+    if(onClick){
+      bar.style('cursor','pointer')
+        .on('click', () => onClick(i))
+        .on('mouseover', function(evt){
+          d3.select(this).attr('stroke-width',2).attr('fill-opacity',0.5);
+          const pct = (((d - avg) / avg)*100).toFixed(1);
+          tip(evt, `<b>Layer ${i}</b><br>${fmtUs(d)}<br>vs avg: ${pct >= 0 ? '+' : ''}${pct}%`);
+        })
+        .on('mousemove', function(evt){ d3.select('#tip').style('left',(evt.clientX+12)+'px').style('top',(evt.clientY-10)+'px'); })
+        .on('mouseout', function(){ d3.select(this).attr('stroke-width',1).attr('fill-opacity',0.3); tipHide(); });
+    }
+    g.append('text').attr('x',x+bw+4).attr('y',y+9).attr('fill','#8b949e').attr('font-size','8px')
+      .text(`L${i}: ${fmtUs(d)}`);
+  });
+  return y0 + durs.length * 13;
+}
+
+function flowTip(opData){
+  if(!opData || !opData.args) return '';
+  const args = opData.args;
+  const gpu = opData.gpu_display || opData.gpu || '';
+  const dur = opData.gpu_dur_us || opData.dur_us;
+  const opLabel = opData.label || opData.op;
+
+  let h = `<div class="ftitle">${opLabel}</div>`;
+  h += `<div class="frow">`;
+
+  // Left: input arg boxes stacked vertically
+  h += `<div class="finputs">`;
+  args.forEach(a => {
+    h += `<div class="fbox">`;
+    h += `<span class="fname">${a.name}</span>`;
+    h += `<span class="fdim">${fmtShape(a.shape)}</span>`;
+    if(a.dtype) h += `<span class="ftype">${a.dtype}</span>`;
+    h += `</div>`;
+  });
+  h += `</div>`;
+
+  // Arrow
+  h += `<span class="farr">──▶</span>`;
+
+  // Center: op box
+  h += `<div class="fbox op">`;
+  h += `<span class="foplabel">${opLabel}</span>`;
+  if(gpu) h += `<span class="fopgpu">${gpu}</span>`;
+  h += `<span class="foptime">${fmtUs(dur)}</span>`;
+  h += `</div>`;
+
+  h += `</div>`;
+
+  // Sub-ops breakdown on hover
+  const subs = opData.sub_ops;
+  if(subs && subs.length){
+    h += `<div style="margin-top:8px;border-top:1px solid #30363d;padding-top:6px">`;
+    h += `<span style="color:#58a6ff;font-size:9px;font-weight:bold">CPU → GPU Dispatch</span>`;
+    function subLine(sub, depth){
+      const pre = depth ? '└ ' : '';
+      const indent = depth * 12;
+      const gpuStr = sub.gpu_display
+        ? `<span style="color:#f0883e">${sub.gpu_display} (${fmtUs(sub.gpu_dur_us)})</span>`
+        : `<span style="color:#484f58">${sub.gpu_note || 'CPU-only'}</span>`;
+      const dimsStr = sub.dims ? ` <span style="color:#8b949e">${sub.dims}</span>` : '';
+      const fs = depth ? 8 : 9;
+      h += `<div style="margin:${depth?1:2}px 0 ${depth?1:2}px ${indent}px;font-size:${fs}px"><span style="color:#7ee787">${pre}${sub.op}</span>${dimsStr} <span style="color:#8b949e">${fmtUs(sub.dur_us)}</span> → ${gpuStr}</div>`;
+      if(sub.sub_ops) sub.sub_ops.forEach(gs => subLine(gs, depth+1));
+    }
+    subs.forEach(sub => subLine(sub, 0));
+    h += `</div>`;
+  }
+
+  return h;
+}
+
+function buildModTooltip(child){
+  const dur = child.avg_dur_us || child.dur_us || 0;
+  const cOps = child.ops || [];
+  const cChildren = child.children || [];
+  let h = `<div class="ftitle">${child.class}</div>`;
+  h += `<div style="margin-bottom:6px;color:#8b949e;font-size:9px">${fmtUs(dur)} | ${cChildren.length} modules | ${cOps.length} ops</div>`;
+  cChildren.forEach(cc => {
+    const ccDur = cc.avg_dur_us || cc.dur_us || 0;
+    h += `<div style="margin:2px 0;font-size:9px"><span style="color:#bc8cff">${cc.class}</span>: ${fmtUs(ccDur)}</div>`;
+  });
+  cOps.forEach(op => {
+    const gpuStr = op.gpu ? ` &rarr; <span style="color:#f0883e">${op.gpu}</span>` : (op.gpu_note ? ` <span style="color:#484f58">${op.gpu_note}</span>` : '');
+    h += `<div style="margin:2px 0;font-size:9px"><span style="color:#7ee787">${op.op}</span> ${fmtUs(op.avg_us||op.dur_us)}${gpuStr}</div>`;
+  });
+  if(child.all_layer_durs)
+    h += `<div style="margin-top:4px;border-top:1px solid #30363d;padding-top:4px;font-size:9px;color:#8b949e">avg: ${fmtUs(child.avg_dur_us)} | min: ${fmtUs(child.min_dur_us)} | max: ${fmtUs(child.max_dur_us)}</div>`;
+  return h;
+}
+
+function renderModContent(g, mod, x, startY, w){
+  const children = mod.children || [];
+  const ops = mod.ops || [];
+  const items = [];
+  ops.forEach(op => items.push({type:'op', seq: op.seq ?? 9999, data: op}));
+  children.forEach(ch => items.push({type:'mod', seq: ch.seq ?? 9999, data: ch}));
+  items.sort((a,b) => a.seq - b.seq);
+  if(!items.length) return startY;
+  let y = startY, prevBottom = null, prevItem = null;
+  items.forEach(item => {
+    if(prevBottom !== null){
+      const mx = x + w/2;
+      g.append('line').attr('x1',mx).attr('y1',prevBottom).attr('x2',mx).attr('y2',y)
+        .attr('stroke','#30363d').attr('stroke-width',1.5);
+      g.append('polygon').attr('points',`${mx},${y} ${mx-4},${y-6} ${mx+4},${y-6}`)
+        .attr('fill','#30363d');
+      if(prevItem && prevItem.data && prevItem.data.dims)
+        g.append('text').attr('x',mx+8).attr('y',(prevBottom+y)/2+3)
+          .attr('fill','#58a6ff').attr('font-size','8px').text(prevItem.data.dims);
+    }
+    let h;
+    if(item.type === 'op') h = drawOpBlock(g, item.data, x, y, w);
+    else h = drawModBlock(g, item.data, x, y, w);
+    prevBottom = y + h;
+    prevItem = item;
+    y += h + 14;
+  });
+  return y;
+}
+
+function drawOpBlock(g, op, x, y, w){
+  const hasGpu = !!op.gpu;
+  const gpuLine = hasGpu ? `GPU: ${op.gpu} (${fmtUs(op.gpu_dur_us)})` : (op.gpu_note || '');
+  const argsStr = (op.args||[]).map(a => `${a.name}${fmtShape(a.shape)}`).join(', ');
+  const statsStr = op.avg_us ? `avg: ${fmtUs(op.avg_us)} | min: ${fmtUs(op.min_us)} | max: ${fmtUs(op.max_us)}` : '';
+  let nl = 1;
+  if(gpuLine) nl++;
+  if(argsStr) nl++;
+  if(op.gpu_note && !hasGpu) nl++;
+  if(statsStr) nl++;
+  const H = Math.max(28, 4 + nl * 14);
+  const cl = hasGpu ? rc(op.gpu_role||'other') : C.tensor;
+  const ng = g.append('g').attr('transform',`translate(${x},${y})`);
+  ng.append('rect').attr('width',w).attr('height',H).attr('rx',6)
+    .attr('fill',cl.f).attr('stroke',cl.s).attr('stroke-width',1.5);
+  let ty = 14;
+  ng.append('text').attr('x',10).attr('y',ty).attr('fill','#e6edf3').attr('font-size','11px').attr('font-weight','bold').text(op.op);
+  const durStr = fmtUs(op.avg_us || op.dur_us);
+  const bw = Math.max(durStr.length * 6 + 14, 40);
+  ng.append('rect').attr('x',w-bw-8).attr('y',3).attr('width',bw).attr('height',15).attr('rx',7).attr('fill',cl.s);
+  ng.append('text').attr('x',w-bw).attr('y',13).attr('fill','#fff').attr('font-size','8px').attr('font-weight','bold').text(durStr);
+  if(gpuLine){ ty+=13; ng.append('text').attr('x',10).attr('y',ty).attr('fill','#8b949e').attr('font-size','9px').text(gpuLine); }
+  if(argsStr){ ty+=12; ng.append('text').attr('x',12).attr('y',ty).attr('fill','#c9d1d9').attr('font-size','9px').text(argsStr); }
+  if(op.gpu_note && !hasGpu){ ty+=12; ng.append('text').attr('x',12).attr('y',ty).attr('fill','#484f58').attr('font-size','9px').text(op.gpu_note); }
+  if(statsStr){ ty+=12; ng.append('text').attr('x',12).attr('y',ty).attr('fill','#8b949e').attr('font-size','9px').text(statsStr); }
+  ng.on('mouseover', function(evt){
+    d3.select(this).select('rect').attr('stroke-width',2.5);
+    let h = flowTip(op);
+    if(!h){ h=`<div class="ftitle">${op.op}</div><div style="color:#8b949e;font-size:9px">${fmtUs(op.avg_us||op.dur_us)}</div>`; if(op.gpu) h+=`<div style="color:#f0883e;font-size:9px">GPU: ${op.gpu}</div>`; if(op.gpu_note) h+=`<div style="color:#484f58;font-size:9px">${op.gpu_note}</div>`; }
+    tip(evt, h);
+  })
+  .on('mousemove', evt => d3.select('#tip').style('left',(evt.clientX+12)+'px').style('top',(evt.clientY-10)+'px'))
+  .on('mouseout', function(){ d3.select(this).select('rect').attr('stroke-width',1.5); tipHide(); });
+  return H;
+}
+
+function drawModBlock(g, child, x, y, w){
+  if(child._expanded) return drawModExpanded(g, child, x, y, w);
+  return drawModCollapsed(g, child, x, y, w);
+}
+
+function drawModCollapsed(g, child, x, y, w){
+  const cOps = child.ops || [];
+  const cChildren = child.children || [];
+  const childDur = child.avg_dur_us || child.dur_us || 0;
+  const repeatStr = child.repeat ? ` ×${child.repeat}` : '';
+  const total = cOps.length + cChildren.length;
+  const summaryLines = [];
+  cChildren.forEach(cc => { summaryLines.push({t:`${cc.class}: ${fmtUs(cc.avg_dur_us||cc.dur_us||0)}`, c:'#c9d1d9'}); });
+  cOps.slice(0,3).forEach(op => {
+    const gpuStr = op.gpu ? `→ ${op.gpu}` : (op.gpu_note || '');
+    summaryLines.push({t:`${op.op} ${fmtUs(op.avg_us||op.dur_us)} ${gpuStr}`, c:'#8b949e'});
+  });
+  if(cOps.length > 3) summaryLines.push({t:`... +${cOps.length-3} more ops`, c:'#484f58'});
+  if(child.all_layer_durs) summaryLines.push({t:`avg: ${fmtUs(child.avg_dur_us)} | min: ${fmtUs(child.min_dur_us)} | max: ${fmtUs(child.max_dur_us)}`, c:'#8b949e'});
+  let nl = 2 + summaryLines.length;
+  const H = Math.max(28, 4 + nl * 14);
+  const cl = C.attn;
+  const ng = g.append('g').attr('transform',`translate(${x},${y})`);
+  ng.append('rect').attr('width',w).attr('height',H).attr('rx',6)
+    .attr('fill',cl.f).attr('stroke',cl.s).attr('stroke-width', total > 0 ? 2 : 1.5);
+  let ty = 14;
+  ng.append('text').attr('x',10).attr('y',ty).attr('fill','#e6edf3').attr('font-size','11px').attr('font-weight','bold')
+    .text(`${child.class}${repeatStr}`);
+  const durStr = fmtUs(childDur);
+  const bw = Math.max(durStr.length * 6 + 14, 40);
+  ng.append('rect').attr('x',w-bw-8).attr('y',3).attr('width',bw).attr('height',15).attr('rx',7).attr('fill',cl.s);
+  ng.append('text').attr('x',w-bw).attr('y',13).attr('fill','#fff').attr('font-size','8px').attr('font-weight','bold').text(durStr);
+  if(total > 0) ng.append('text').attr('x',w-14).attr('y',14).attr('fill','#484f58').attr('font-size','11px').text('▸');
+  ty += 13;
+  ng.append('text').attr('x',10).attr('y',ty).attr('fill','#8b949e').attr('font-size','9px')
+    .text(`${fmtUs(childDur)} | ${cChildren.length} sub-modules | ${cOps.length} ops`);
+  summaryLines.forEach(d => { ty+=12; ng.append('text').attr('x',12).attr('y',ty).attr('fill',d.c||'#8b949e').attr('font-size','9px').text(d.t); });
+  if(total > 0){
+    ng.style('cursor','pointer')
+      .on('click', () => { child._expanded = true; render(); })
+      .on('mouseover', function(evt){
+        d3.select(this).select('rect').attr('stroke-width',3);
+        tip(evt, buildModTooltip(child));
+      })
+      .on('mousemove', evt => d3.select('#tip').style('left',(evt.clientX+12)+'px').style('top',(evt.clientY-10)+'px'))
+      .on('mouseout', function(){ d3.select(this).select('rect').attr('stroke-width',2); tipHide(); });
+  }
+  return H;
+}
+
+function drawModExpanded(g, child, x, y, w){
+  const childDur = child.avg_dur_us || child.dur_us || 0;
+  const repeatStr = child.repeat ? ` ×${child.repeat}` : '';
+  const cOps = child.ops || [];
+  const cChildren = child.children || [];
+  const headerH = 38, pad = 16;
+  const innerX = x + pad, innerW = w - pad * 2;
+  const innerStartY = y + headerH;
+  const ng = g.append('g');
+  const containerRect = ng.append('rect')
+    .attr('x',x).attr('y',y).attr('width',w)
+    .attr('rx',8).attr('fill','#0d1117')
+    .attr('stroke','#58a6ff').attr('stroke-width',2);
+  ng.append('text').attr('x',x+12).attr('y',y+18).attr('fill','#58a6ff')
+    .attr('font-size','12px').attr('font-weight','bold')
+    .text(`${child.class}${repeatStr}`);
+  ng.append('text').attr('x',x+12).attr('y',y+32).attr('fill','#8b949e')
+    .attr('font-size','9px')
+    .text(`${fmtUs(childDur)} | ${cChildren.length} sub-modules | ${cOps.length} direct ops`);
+  const durStr = fmtUs(childDur);
+  const bw = Math.max(durStr.length * 6 + 14, 40);
+  ng.append('rect').attr('x',x+w-bw-30).attr('y',y+5).attr('width',bw).attr('height',15).attr('rx',7).attr('fill','#58a6ff');
+  ng.append('text').attr('x',x+w-bw-22).attr('y',y+15).attr('fill','#fff').attr('font-size','8px').attr('font-weight','bold').text(durStr);
+  ng.append('text').attr('x',x+w-16).attr('y',y+18).attr('fill','#58a6ff')
+    .attr('font-size','11px').text('▾');
+  ng.append('rect').attr('x',x).attr('y',y).attr('width',w).attr('height',headerH)
+    .attr('fill','transparent').style('cursor','pointer')
+    .on('click', () => { child._expanded = false; render(); });
+  const finalY = renderModContent(ng, child, innerX, innerStartY, innerW);
+  const totalH = Math.max(headerH + 10, finalY - y + 8);
+  containerRect.attr('height', totalH);
+  return totalH;
+}
+
+function dia(g, steps, {x=60, y0=40, w=500} = {}){
+  let y = y0; const R = [];
+  steps.forEach((s,i) => {
+    let nl = 1; if(s.sub) nl++; nl += (s.items||[]).length;
+    const H = Math.max(28, 4 + nl * 14);
+    const cl = s.col || C.sched;
+    const ng = g.append('g').attr('transform', `translate(${x},${y})`);
+
+    ng.append('rect').attr('width', w).attr('height', H).attr('rx', 6)
+      .attr('fill', cl.f).attr('stroke', cl.s)
+      .attr('stroke-width', s.click ? 2 : 1.5)
+      .attr('stroke-dasharray', s.dashed ? '5,3' : null);
+
+    let ty = 14;
+    ng.append('text').attr('x', 10).attr('y', ty)
+      .attr('fill', '#e6edf3').attr('font-size', '11px').attr('font-weight', 'bold')
+      .text(s.label);
+
+    if(s.badge){
+      const bw = Math.max(s.badge.length * 6 + 14, 40);
+      ng.append('rect').attr('x', w-bw-8).attr('y', 3).attr('width', bw).attr('height', 15).attr('rx', 7).attr('fill', cl.s);
+      ng.append('text').attr('x', w-bw).attr('y', 13).attr('fill', '#fff').attr('font-size', '8px').attr('font-weight', 'bold').text(s.badge);
+    }
+    if(s.click) ng.append('text').attr('x', w-14).attr('y', 14).attr('fill', '#484f58').attr('font-size', '11px').text('▸');
+
+    if(s.sub){ ty += 13; ng.append('text').attr('x', 10).attr('y', ty).attr('fill', '#8b949e').attr('font-size', '9px').text(s.sub); }
+    (s.items||[]).forEach(d => { ty += 12; ng.append('text').attr('x', 12).attr('y', ty).attr('fill', d.c||'#8b949e').attr('font-size', '9px').text(d.t); });
+
+    // Hover: show flow diagram if op data is attached
+    if(s.opData && s.opData.args){
+      ng.on('mouseover', function(evt){
+        if(s.click) d3.select(this).select('rect').attr('stroke-width', 3);
+        tip(evt, flowTip(s.opData));
+      }).on('mousemove', function(evt){
+        d3.select('#tip').style('left',(evt.clientX+12)+'px').style('top',(evt.clientY-10)+'px');
+      }).on('mouseout', function(){
+        if(s.click) d3.select(this).select('rect').attr('stroke-width', 2);
+        tipHide();
+      });
+    }
+
+    if(s.click){
+      ng.style('cursor', 'pointer').on('click', s.click);
+      if(!s.opData || !s.opData.args){
+        ng.on('mouseover', function(evt){
+          d3.select(this).select('rect').attr('stroke-width', 3);
+          if(s.tipHtml) tip(evt, s.tipHtml);
+        })
+        .on('mousemove', function(evt){ if(s.tipHtml) d3.select('#tip').style('left',(evt.clientX+12)+'px').style('top',(evt.clientY-10)+'px'); })
+        .on('mouseout', function(){
+          d3.select(this).select('rect').attr('stroke-width', 2);
+          if(s.tipHtml) tipHide();
+        });
+      }
+    }
+
+    // Edge: show output shape flowing to next op
+    if(i > 0){
+      const p = R[i-1], mx = x + w/2, y1 = p.y + p.h, y2 = y;
+      g.append('line').attr('x1', mx).attr('y1', y1).attr('x2', mx).attr('y2', y2)
+        .attr('stroke', '#30363d').attr('stroke-width', 1.5);
+      g.append('polygon').attr('points', `${mx},${y2} ${mx-4},${y2-6} ${mx+4},${y2-6}`).attr('fill', '#30363d');
+      const prevOp = steps[i-1].opData;
+      const edgeLabel = prevOp && prevOp.dims ? prevOp.dims : (steps[i-1].edge || '');
+      if(edgeLabel) g.append('text').attr('x', mx+8).attr('y', (y1+y2)/2+3).attr('fill', '#58a6ff').attr('font-size', '8px').text(edgeLabel);
+    }
+    R.push({y, h:H}); y += H + 14;
+  });
+  return y;
+}
+
+// ═══ Top Level: Model module tree ═══
+function vTop(){
+  const g = mkG();
+  const mt = M.module_tree;
+  const pre = M.pre_model_ops || [];
+  const post = M.post_model_ops || [];
+
+  g.append('text').attr('x',60).attr('y',20).attr('fill','#58a6ff').attr('font-size','13px').attr('font-weight','bold')
+    .text(`${mt.class} — ${G.device} | ${G.dtype} | ${M.mode} mode`);
+  g.append('text').attr('x',60).attr('y',36).attr('fill','#8b949e').attr('font-size','10px')
+    .text(`${fmtUs(mt.dur_us)} model forward | ${M.layers} layers | ${M.stats.total_cpu_ops} cpu ops → ${M.stats.total_kernels} GPU kernels`);
+
+  const steps = [];
+
+  // Pre-model ops
+  if(pre.length){
+    const preTotal = pre.reduce((s,o) => s + o.dur_us, 0);
+    const preItems = pre.filter(o => o.dur_us > 5).slice(0,4).map(o => {
+      const gpuStr = o.gpu ? o.gpu : (o.gpu_note || '');
+      return {t:`${o.op}: ${fmtUs(o.dur_us)} ${gpuStr}`, c:'#8b949e'};
+    });
+    steps.push({
+      label:`Pre-Model — ${pre.length} ops`,
+      sub:`Scheduler, input prep | ${fmtUs(preTotal)}`,
+      col:C.sched, badge:fmtUs(preTotal),
+      items: preItems,
+      click:()=>nav('pre'),
+    });
+  }
+
+  // Model children as blocks
+  const children = mt.children || [];
+  children.forEach(child => {
+    const rep = child.repeat ? ` ×${child.repeat}` : '';
+    const cChildren = child.children || [];
+    const cOps = child.ops || [];
+    const dur = child.avg_dur_us || child.dur_us;
+
+    const items = [];
+    // Show child modules summary
+    cChildren.forEach(cc => {
+      const ccDur = cc.avg_dur_us || cc.dur_us || 0;
+      const ccOps = (cc.ops||[]).length + (cc.children||[]).length;
+      items.push({t:`${cc.class}: ${fmtUs(ccDur)} (${ccOps} items)`, c:'#c9d1d9'});
+    });
+    // Show direct ops summary
+    cOps.slice(0,3).forEach(op => {
+      const gpuStr = op.gpu ? `→ ${op.gpu}` : (op.gpu_note || '');
+      items.push({t:`${op.op} ${fmtUs(op.avg_us||op.dur_us)} ${gpuStr}`, c:'#8b949e'});
+    });
+    if(cOps.length > 3) items.push({t:`... +${cOps.length-3} more ops`, c:'#484f58'});
+
+    // Timing stats for repeated layers
+    if(child.per_layer_dur){
+      items.push({t:`avg: ${fmtUs(child.avg_dur_us)} | min: ${fmtUs(child.min_dur_us)} | max: ${fmtUs(child.max_dur_us)}`, c: C.gemm.s});
+    }
+
+    const hasContent = cChildren.length > 0 || cOps.length > 0;
+    steps.push({
+      label: `${child.class}${rep}`,
+      sub: `${fmtUs(dur)} | ${cChildren.length} sub-modules | ${cOps.length} direct ops`,
+      col: child.repeat ? C.gemm : C.embed,
+      badge: fmtUs(child.repeat ? dur * child.repeat : dur),
+      items,
+      click: hasContent ? () => nav('mod', child) : null,
+      tipHtml: hasContent ? buildModTooltip(child) : null,
+    });
+  });
+
+  // Post-model ops
+  if(post.length){
+    const postTotal = post.reduce((s,o) => s + o.dur_us, 0);
+    const postItems = post.filter(o => o.dur_us > 2).slice(0,6).map(o => {
+      const gpuStr = o.gpu ? `→ ${o.gpu}` : (o.gpu_note || '');
+      const d = o.dims ? ` | ${o.dims}` : '';
+      return {t:`${o.op}: ${fmtUs(o.dur_us)} ${gpuStr}${d}`, c:'#8b949e'};
+    });
+    steps.push({
+      label:`Post-Model — ${post.length} ops`,
+      sub:`LM Head + Sampling | ${fmtUs(postTotal)}`,
+      col:C.out, badge:fmtUs(postTotal),
+      items: postItems,
+      click:()=>nav('post'),
+    });
+  }
+
+  steps.push({label:'Output Token', col:C.tensor, dashed:true});
+
+  dia(g, steps, {w:660});
+
+  // Sidebar: per-layer variance (if decoder layers exist)
+  const dlayer = children.find(c => c.repeat);
+  if(dlayer && dlayer.per_layer_dur){
+    const sg = g.append('g').attr('transform','translate(760,40)');
+    let sy = layerBars(sg, dlayer.per_layer_dur, {onClick: i => nav('layer', i)});
+
+    // Kernel summary below
+    sy += 16;
+    sg.append('text').attr('y',sy).attr('fill','#58a6ff').attr('font-size','10px').attr('font-weight','bold').text('Kernel Summary');
+    sy += 14;
+    Object.entries(M.kernel_summary||{}).slice(0,12).forEach(([name,kv]) => {
+      const short = name.length > 40 ? name.slice(0,37)+'...' : name;
+      sg.append('text').attr('y',sy).attr('fill','#8b949e').attr('font-size','8px')
+        .text(`${kv.count}× ${kv.role} — ${short} — ${fmtUs(kv.total_dur_us)}`);
+      sy += 12;
+    });
+  }
+}
+
+// ═══ Layer view: all ops for one layer ═══
+function vLayer(layerIdx){
+  const g = mkG(), gc = F.gpu_chain;
+  const nl = gc.layers;
+  const tmpl = gc.layer_template;
+  const totalTmpl = tmpl.reduce((s,x) => s+x.avg_us, 0);
+
+  if(layerIdx == null){
+    g.append('text').attr('x',60).attr('y',20).attr('fill','#58a6ff').attr('font-size','13px').attr('font-weight','bold')
+      .text(`Decoder Layer — ${tmpl.length} ops/layer | ${nl} layers`);
+
+    const steps = [];
+    tmpl.forEach((t, i) => {
+      const pct = (100 * t.avg_us / totalTmpl).toFixed(1);
+      const gpuLine = t.gpu_display ? `GPU: ${t.gpu_display}` : `CPU: ${t.op}`;
+      const argsStr = (t.args||[]).map(a => `${a.name}${fmtShape(a.shape)}`).join(', ');
+      steps.push({
+        label: t.label,
+        sub: `${gpuLine}`,
+        col: rc(t.role),
+        badge: fmtUs(t.avg_us),
+        opData: t,
+        items:[
+          {t:`${argsStr}`, c:'#c9d1d9'},
+          {t:`avg: ${fmtUs(t.avg_us)} | min: ${fmtUs(t.min_us)} | max: ${fmtUs(t.max_us)} | ${pct}%`, c: rc(t.role).s},
+        ],
+        click: () => nav('step', t),
+      });
+    });
+
+    dia(g, steps, {w:620});
+
+    // Per-layer heatmap
+    const sg = g.append('g').attr('transform','translate(720,40)');
+    const layerTotals = gc.per_layer.map(l => l.total_us);
+    layerBars(sg, layerTotals, {title: 'Per-Layer Total Time', onClick: i => nav('layer', i)});
+
+  } else {
+    const ld = gc.per_layer[layerIdx];
+    if(!ld) return;
+    const ops = ld.ops;
+    const totalUs = ld.total_us;
+
+    g.append('text').attr('x',60).attr('y',20).attr('fill','#58a6ff').attr('font-size','13px').attr('font-weight','bold')
+      .text(`Layer ${layerIdx} — ${ops.length} ops | ${fmtUs(totalUs)} total`);
+
+    const steps = ops.map((k, i) => {
+      const dur = k.gpu_dur_us || k.dur_us;
+      const gpuLine = k.gpu_display ? `GPU: ${k.gpu_display} (${fmtUs(k.gpu_dur_us||0)})` : `CPU: ${k.op} (${fmtUs(k.dur_us)})`;
+      const argsStr = (k.args||[]).map(a => `${a.name}${fmtShape(a.shape)}`).join(', ');
+      return {
+        label: k.label,
+        sub: `${gpuLine}`,
+        col: rc(k.role),
+        badge: fmtUs(dur),
+        opData: k,
+        items:[
+          ...(argsStr ? [{t:argsStr, c:'#c9d1d9'}] : []),
+          {t:`cpu: ${fmtUs(k.dur_us)}${k.gpu_dur_us ? ' | gpu: '+fmtUs(k.gpu_dur_us) : ''}`, c:'#8b949e'},
+        ],
+      };
+    });
+
+    dia(g, steps, {w:620});
+
+    // Compare to template
+    const sg = g.append('g').attr('transform','translate(720,40)');
+    sg.append('text').attr('fill','#58a6ff').attr('font-size','11px').attr('font-weight','bold').text(`Layer ${layerIdx} vs Average`);
+    let sy = 18;
+    ops.forEach((k, i) => {
+      const dur = k.gpu_dur_us || k.dur_us;
+      const avg = (i < tmpl.length) ? tmpl[i].avg_us : dur;
+      const diff = dur - avg;
+      const diffPct = avg > 0 ? ((diff / avg) * 100).toFixed(0) : '0';
+      const color = diff > avg * 0.1 ? '#f85149' : diff < -avg * 0.1 ? '#2ea043' : '#8b949e';
+      sg.append('text').attr('y', sy).attr('fill', color).attr('font-size', '9px')
+        .text(`${k.label}: ${fmtUs(dur)} (${diff >= 0 ? '+' : ''}${diffPct}%)`);
+      sy += 14;
+    });
+  }
+}
+
+// ═══ Step detail: per-layer variance for one kernel step ═══
+function vStep(stepData){
+  const g = mkG(), gc = F.gpu_chain, nl = gc.layers;
+
+  const gpuInfo = stepData.gpu_display ? ` — ${stepData.gpu_display}` : ` — ${stepData.op}`;
+  const dimsInfo = stepData.dims ? ` | ${stepData.dims}` : '';
+  g.append('text').attr('x',60).attr('y',20).attr('fill','#58a6ff').attr('font-size','13px').attr('font-weight','bold')
+    .text(`${stepData.label}${gpuInfo}`);
+  g.append('text').attr('x',60).attr('y',36).attr('fill','#8b949e').attr('font-size','10px')
+    .text(`avg: ${fmtUs(stepData.avg_us)} | min: ${fmtUs(stepData.min_us)} | max: ${fmtUs(stepData.max_us)} | across ${nl} layers${dimsInfo}`);
+
+  const durs = stepData.all_layer_durs || [];
+  if(!durs.length) return;
+
+  const maxDur = Math.max(...durs);
+  const barW = 500, barH = 12, gap = 3;
+  const sg = g.append('g').attr('transform','translate(60,55)');
+
+  durs.forEach((d, i) => {
+    const y = i * (barH + gap);
+    const bw = Math.max(2, barW * d / maxDur);
+    const cl = rc(stepData.role);
+
+    sg.append('rect').attr('x', 0).attr('y', y).attr('width', bw).attr('height', barH)
+      .attr('rx', 2).attr('fill', cl.f).attr('stroke', cl.s).attr('stroke-width', 1)
+      .style('cursor','pointer')
+      .on('click', () => nav('layer', i))
+      .on('mouseover', function(evt){
+        d3.select(this).attr('stroke-width', 2);
+        tip(evt, `<b>Layer ${i}</b><br>${fmtUs(d)}<br>vs avg: ${(((d - stepData.avg_us) / stepData.avg_us)*100).toFixed(1)}%`);
+      })
+      .on('mouseout', function(){ d3.select(this).attr('stroke-width', 1); tipHide(); });
+
+    sg.append('text').attr('x', bw + 6).attr('y', y + 10).attr('fill', '#c9d1d9').attr('font-size', '9px')
+      .text(`L${i}: ${fmtUs(d)}`);
+  });
+
+  // Summary stats on the right
+  const avg = stepData.avg_us;
+  const rg = g.append('g').attr('transform',`translate(620, 55)`);
+  rg.append('text').attr('fill','#58a6ff').attr('font-size','11px').attr('font-weight','bold').text('Statistics');
+  let ry = 16;
+  if(stepData.dims) { rg.append('text').attr('y',ry).attr('fill','#c9d1d9').attr('font-size','9px').text(`Input: ${stepData.dims}`); ry+=12; }
+  if(stepData.gpu_display) { rg.append('text').attr('y',ry).attr('fill','#8b949e').attr('font-size','9px').text(`GPU: ${stepData.gpu_display}`); ry+=12; }
+  rg.append('text').attr('y',ry).attr('fill','#c9d1d9').attr('font-size','9px').text(`op: ${stepData.op}`); ry+=16;
+  rg.append('text').attr('y',ry).attr('fill','#c9d1d9').attr('font-size','9px').text(`Average: ${fmtUs(avg)}`); ry+=12;
+  rg.append('text').attr('y',ry).attr('fill','#c9d1d9').attr('font-size','9px').text(`Min: ${fmtUs(stepData.min_us)}`); ry+=12;
+  rg.append('text').attr('y',ry).attr('fill','#c9d1d9').attr('font-size','9px').text(`Max: ${fmtUs(stepData.max_us)}`); ry+=12;
+  const variance = durs.reduce((s,d) => s + (d - avg)**2, 0) / durs.length;
+  rg.append('text').attr('y',ry).attr('fill','#c9d1d9').attr('font-size','9px').text(`StdDev: ${fmtUs(Math.sqrt(variance))}`); ry+=12;
+  rg.append('text').attr('y',ry).attr('fill','#c9d1d9').attr('font-size','9px').text(`CV: ${((Math.sqrt(variance)/avg)*100).toFixed(1)}%`); ry+=16;
+  const totalAcrossLayers = durs.reduce((s,d) => s+d, 0);
+  rg.append('text').attr('y',ry).attr('fill','#8b949e').attr('font-size','9px').text(`Total across ${nl} layers: ${fmtUs(totalAcrossLayers)}`);
+
+  // Sub-ops table: CPU→GPU dispatch hierarchy
+  const subs = stepData.sub_ops;
+  if(subs && subs.length){
+    const barsH = durs.length * (barH + gap) + 20;
+    const sg2 = g.append('g').attr('transform',`translate(60,${55 + barsH})`);
+    sg2.append('text').attr('fill','#58a6ff').attr('font-size','11px').attr('font-weight','bold')
+      .text(`CPU → GPU Dispatch (${subs.length} child ops)`);
+    sg2.append('line').attr('x1',0).attr('y1',6).attr('x2',560).attr('y2',6)
+      .attr('stroke','#21262d').attr('stroke-width',1);
+
+    let sy = 22;
+    const hdrs2 = [['CPU Operation',0],['Duration',220],['Input Shapes',300],['GPU Dispatch',520]];
+    hdrs2.forEach(([t,hx]) => {
+      sg2.append('text').attr('x',hx).attr('y',sy).attr('fill','#8b949e')
+        .attr('font-size','8px').attr('font-weight','bold').text(t);
+    });
+    sy += 14;
+
+    function renderSubs(list, depth){
+      list.forEach(sub => {
+        const indent = depth * 12;
+        const hasGpu = !!sub.gpu_display;
+        const opColor = hasGpu ? '#f0883e' : '#7ee787';
+        sg2.append('text').attr('x', indent).attr('y', sy).attr('fill', opColor)
+          .attr('font-size','9px').text((depth?'└ ':'')+sub.op);
+        sg2.append('text').attr('x',220).attr('y',sy).attr('fill','#c9d1d9')
+          .attr('font-size','9px').text(fmtUs(sub.dur_us));
+        if(sub.dims) sg2.append('text').attr('x',300).attr('y',sy).attr('fill','#8b949e')
+          .attr('font-size','9px').text(sub.dims.substring(0,40));
+        if(hasGpu){
+          sg2.append('text').attr('x',520).attr('y',sy).attr('fill','#f0883e')
+            .attr('font-size','9px').text(sub.gpu_display + ' (' + fmtUs(sub.gpu_dur_us) + ')');
+        } else {
+          sg2.append('text').attr('x',520).attr('y',sy).attr('fill','#484f58')
+            .attr('font-size','9px').text(sub.gpu_note || 'CPU-only');
+        }
+        sy += 14;
+        if(sub.sub_ops) renderSubs(sub.sub_ops, depth+1);
+      });
+    }
+    renderSubs(subs, 0);
+  }
+}
+
+// ═══ Post-Layer: LM Head + Sampling ═══
+function vPost(){
+  const g = mkG(), gc = F.gpu_chain;
+  const postTotal = gc.post_layers.reduce((s,k) => s + (k.gpu_dur_us || k.dur_us), 0);
+
+  g.append('text').attr('x',60).attr('y',20).attr('fill','#58a6ff').attr('font-size','13px').attr('font-weight','bold')
+    .text(`Post-Layer — ${gc.post_layers.length} ops | ${fmtUs(postTotal)} total`);
+
+  const steps = gc.post_layers.map(k => {
+    const argsStr = (k.args||[]).map(a => `${a.name}${fmtShape(a.shape)}`).join(', ');
+    return {
+      label: k.label,
+      sub: k.gpu_display ? `GPU: ${k.gpu_display}` : `CPU: ${k.op}`,
+      col: rc(k.role),
+      badge: fmtUs(k.gpu_dur_us || k.dur_us),
+      opData: k,
+      items:[
+        ...(argsStr ? [{t:argsStr, c:'#c9d1d9'}] : []),
+        {t:`cpu: ${fmtUs(k.dur_us)}${k.gpu_dur_us ? ' | gpu: '+fmtUs(k.gpu_dur_us) : ''}`, c:'#8b949e'},
+      ],
+    };
+  });
+
+  dia(g, steps, {w:620});
+}
+
+// ═══ Pre-Layer: Scheduling ops ═══
+function vPre(){
+  const g = mkG(), gc = F.gpu_chain;
+  const preTotal = gc.pre_layers.reduce((s,k) => s + (k.gpu_dur_us || k.dur_us), 0);
+
+  g.append('text').attr('x',60).attr('y',20).attr('fill','#58a6ff').attr('font-size','13px').attr('font-weight','bold')
+    .text(`Pre-Layer — ${gc.pre_layers.length} ops | ${fmtUs(preTotal)} total`);
+
+  const steps = gc.pre_layers.map(k => {
+    const argsStr = (k.args||[]).map(a => `${a.name}${fmtShape(a.shape)}`).join(', ');
+    return {
+      label: k.label || k.op,
+      sub: k.gpu_display ? `GPU: ${k.gpu_display}` : `CPU: ${k.op}`,
+      col: rc(k.role),
+      badge: fmtUs(k.gpu_dur_us || k.dur_us),
+      opData: k,
+      items:[
+        ...(argsStr ? [{t:argsStr, c:'#c9d1d9'}] : []),
+      ],
+    };
+  });
+
+  dia(g, steps, {w:620});
+}
+
+// ═══ Module Hierarchy: drill into module tree ═══
+function vMod(mod){
+  const g = mkG();
+  const repeatLabel = mod.repeat ? ` ×${mod.repeat} (showing layer 0)` : '';
+  const modDur = mod.avg_dur_us || mod.dur_us;
+  g.append('text').attr('x',60).attr('y',20).attr('fill','#58a6ff').attr('font-size','13px').attr('font-weight','bold')
+    .text(`${mod.class}${repeatLabel}`);
+  g.append('text').attr('x',60).attr('y',36).attr('fill','#8b949e').attr('font-size','10px')
+    .text(`${fmtUs(modDur)} | ${(mod.children||[]).length} sub-modules | ${(mod.ops||[]).length} direct ops`);
+  renderModContent(g, mod, 60, 50, 660);
+  if(mod.all_layer_durs && mod.all_layer_durs.length > 1){
+    const rg = g.append('g').attr('transform',`translate(760,40)`);
+    layerBars(rg, mod.all_layer_durs, {
+      title: `Per-Layer — ${mod.class}`,
+      onClick: i => nav('layer', i),
+    });
+  }
+}
+
+boot();
+</script>
+</body>
+</html>

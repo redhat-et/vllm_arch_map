@@ -1,0 +1,107 @@
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                               aten::mm         0.01%       9.704ms         0.02%      15.912ms      10.974us     726.543ms        98.78%     726.543ms     501.064us          1450  
+                   execute_context_0(0)_generation_1(1)         0.00%       0.000us         0.00%       0.000us       0.000us     605.010ms        82.25%     605.010ms      67.223ms             9  
+std::enable_if<!(false), void>::type internal::gemvx...         0.00%       0.000us         0.00%       0.000us       0.000us     543.846ms        73.94%     543.846ms     744.995us           730  
+std::enable_if<!(false), void>::type internal::gemvx...         0.00%       0.000us         0.00%       0.000us       0.000us     182.697ms        24.84%     182.697ms     253.745us           720  
+                   execute_context_1(1)_generation_0(0)         0.00%       0.000us         0.00%       0.000us       0.000us      70.859ms         9.63%      70.859ms      70.859ms             1  
+                                 _C::fused_add_rms_norm         0.00%       1.937ms         0.01%       4.893ms       6.796us       1.519ms         0.21%       1.519ms       2.110us           720  
+std::enable_if<(((8)>(0)))&&vllm::_typeConvert<c10::...         0.00%       0.000us         0.00%       0.000us       0.000us       1.519ms         0.21%       1.519ms       2.110us           720  
+                                _vllm_fa2_C::varlen_fwd         0.01%       9.073ms         0.02%      22.477ms      62.435us       1.420ms         0.19%       1.787ms       4.965us           360  
+void flash::flash_fwd_splitkv_kernel<Flash_fwd_kerne...         0.00%       0.000us         0.00%       0.000us       0.000us       1.420ms         0.19%       1.420ms       3.945us           360  
+                                           _C::rms_norm         0.00%       2.000ms         0.01%       5.097ms       6.982us       1.335ms         0.18%       1.335ms       1.829us           730  
+void vllm::rms_norm_kernel<c10::BFloat16, 8, 3, true...         0.00%       0.000us         0.00%       0.000us       0.000us       1.317ms         0.18%       1.317ms       1.829us           720  
+                  _C_cache_ops::reshape_and_cache_flash         0.00%       1.275ms         0.00%       2.770ms       7.695us       1.262ms         0.17%       1.262ms       3.507us           360  
+void vllm::reshape_and_cache_flash_kernel<__nv_bfloa...         0.00%       0.000us         0.00%       0.000us       0.000us       1.262ms         0.17%       1.262ms       3.507us           360  
+                                       _C::silu_and_mul         0.00%     870.336us         0.00%       2.411ms       6.696us     974.624us         0.13%     974.624us       2.707us           360  
+void vllm::act_and_mul_kernel<c10::BFloat16, __nv_bf...         0.00%       0.000us         0.00%       0.000us       0.000us     974.624us         0.13%     974.624us       2.707us           360  
+                                   _C::rotary_embedding         0.00%       1.021ms         0.00%       2.550ms       7.084us     799.713us         0.11%     799.713us       2.221us           360  
+void vllm::rotary_embedding_kernel<c10::BFloat16, c1...         0.00%       0.000us         0.00%       0.000us       0.000us     799.713us         0.11%     799.713us       2.221us           360  
+                                         aten::_softmax         0.00%     120.144us         0.00%     211.280us      21.128us     523.264us         0.07%     523.264us      52.326us            10  
+void at::native::(anonymous namespace)::cunn_SoftMax...         0.00%       0.000us         0.00%       0.000us       0.000us     523.264us         0.07%     523.264us      52.326us            10  
+                               cudaStreamGetCaptureInfo         0.00%      25.072us         0.00%      25.072us       0.836us     492.096us         0.07%     492.096us      16.403us            30  
+                                            aten::copy_         0.00%       1.345ms         0.00%       4.364ms       9.612us     464.640us         0.06%     464.640us       1.023us           454  
+                               cudaEventRecordWithFlags         0.00%     162.720us         0.00%     162.720us       2.543us     438.848us         0.06%     438.848us       6.857us            64  
+                         Memcpy DtoD (Device -> Device)         0.00%       0.000us         0.00%       0.000us       0.000us     367.104us         0.05%     367.104us       1.020us           360  
+                                       cuLaunchKernelEx         0.00%     662.672us         0.00%     662.672us       8.836us     304.832us         0.04%     304.832us       4.064us            75  
+                                       cudaLaunchKernel         0.02%      20.513ms         0.02%      20.513ms       4.558us     250.656us         0.03%     250.656us       0.056us          4500  
+void flashinfer::sampling::RadixTopKMaskLogitsKernel...         0.00%       0.000us         0.00%       0.000us       0.000us     223.232us         0.03%     223.232us      22.323us            10  
+void flashinfer::sampling::TopPSamplingFromProbKerne...         0.00%       0.000us         0.00%       0.000us       0.000us     121.888us         0.02%     121.888us      12.189us            10  
+                                            aten::index         0.00%     659.248us         0.00%       1.259ms      25.175us      94.784us         0.01%      94.784us       1.896us            50  
+                                    _temperature_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      48.288us         0.01%      48.288us       4.829us            10  
+void at::native::index_elementwise_kernel<128, 4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      45.888us         0.01%      45.888us       1.530us            30  
+                                    _post_update_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      44.288us         0.01%      44.288us       4.429us            10  
+                                     aten::index_select         0.00%     221.440us         0.00%     409.840us      40.984us      37.920us         0.01%      37.920us       3.792us            10  
+void at::native::(anonymous namespace)::indexSelectS...         0.00%       0.000us         0.00%       0.000us       0.000us      37.920us         0.01%      37.920us       3.792us            10  
+void at::native::index_elementwise_kernel<128, 4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      33.600us         0.00%      33.600us       3.360us            10  
+void at::native::unrolled_elementwise_kernel<at::nat...         0.00%       0.000us         0.00%       0.000us       0.000us      28.000us         0.00%      28.000us       2.800us            10  
+                         Memcpy DtoH (Device -> Pinned)         0.00%       0.000us         0.00%       0.000us       0.000us      27.456us         0.00%      27.456us       1.373us            20  
+                                            aten::fill_         0.00%     490.368us         0.00%       1.168ms      22.911us      25.760us         0.00%      25.760us       0.505us            51  
+                            _gather_block_tables_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      25.472us         0.00%      25.472us       2.547us            10  
+void at::native::unrolled_elementwise_kernel<at::nat...         0.00%       0.000us         0.00%       0.000us       0.000us      25.248us         0.00%      25.248us       1.262us            20  
+                          _compute_slot_mappings_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      19.744us         0.00%      19.744us       1.974us            10  
+void vllm::rms_norm_kernel<c10::BFloat16, 8, 2, true...         0.00%       0.000us         0.00%       0.000us       0.000us      18.272us         0.00%      18.272us       1.827us            10  
+                         Memcpy HtoD (Pinned -> Device)         0.00%       0.000us         0.00%       0.000us       0.000us      16.832us         0.00%      16.832us       0.701us            24  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      16.832us         0.00%      16.832us       0.842us            20  
+void at::native::index_elementwise_kernel<128, 4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      15.296us         0.00%      15.296us       1.530us            10  
+               _combine_sampled_and_draft_tokens_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      13.536us         0.00%      13.536us       1.354us            10  
+                   _get_num_sampled_and_rejected_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      13.152us         0.00%      13.152us       1.315us            10  
+                                    _apply_write_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      11.424us         0.00%      11.424us       2.856us             4  
+                           _prepare_pos_seq_lens_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      10.304us         0.00%      10.304us       1.030us            10  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us       8.928us         0.00%       8.928us       0.893us            10  
+                                           aten::arange         0.00%     320.432us         0.00%       1.096ms      54.807us       8.224us         0.00%      16.448us       0.822us            20  
+void (anonymous namespace)::elementwise_kernel_with_...         0.00%       0.000us         0.00%       0.000us       0.000us       8.224us         0.00%       8.224us       0.822us            10  
+                                 cudaDeviceGetAttribute         0.00%     254.704us         0.00%     254.704us       0.227us       8.000us         0.00%       8.000us       0.007us          1120  
+                                  cudaStreamIsCapturing         0.00%      87.424us         0.00%      87.424us       0.741us       2.688us         0.00%       2.688us       0.023us           118  
+                         _prepare_prefill_inputs_kernel         0.00%       0.000us         0.00%       0.000us       0.000us       2.560us         0.00%       2.560us       2.560us             1  
+                         threading.py(1032): _bootstrap         0.00%       1.584us       100.00%       90.904s       15.151s       0.000us         0.00%       0.000us       0.000us             6  
+                   threading.py(1075): _bootstrap_inner         0.00%       3.728us       100.00%       90.904s       15.151s       0.000us         0.00%       0.000us       0.000us             6  
+                                threading.py(1012): run         0.00%       3.088us        66.67%       60.602s       15.151s       0.000us         0.00%       0.000us       0.000us             4  
+/home/redhat-et/lkesem/vllm/vllm/v1/engine/utils.py(...         0.00%       0.752us        16.67%       15.151s       15.151s       0.000us         0.00%       0.000us       0.000us             1  
+                                threading.py(655): wait         0.00%      12.576us        21.65%       19.680s        6.560s       0.000us         0.00%       0.000us       0.000us             3  
+                                threading.py(355): wait         0.00%     559.984us        16.67%       15.151s        7.576s       0.000us         0.00%       0.000us       0.000us             2  
+/home/redhat-et/lkesem/vllm/vllm/v1/engine/core.py(1...         0.00%     398.848us        16.67%       15.151s       15.151s       0.000us         0.00%       0.000us       0.000us             1  
+                                     queue.py(171): get         0.00%      13.168us         0.00%     611.456us     611.456us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/engine/core.py(1...         0.00%     107.648us        16.67%       15.151s       15.151s       0.000us         0.00%       0.000us       0.000us             1  
+                           zmq/sugar/poll.py(106): poll        11.03%       10.023s        11.03%       10.023s       10.023s       0.000us         0.00%       0.000us       0.000us             1  
+                              tqdm/_monitor.py(69): run         0.00%      72.656us        33.33%       30.301s       15.151s       0.000us         0.00%       0.000us       0.000us             2  
+                                threading.py(359): wait         4.98%        4.529s         4.98%        4.529s        2.264s       0.000us         0.00%       0.000us       0.000us             2  
+/home/redhat-et/lkesem/vllm/vllm/usage/usage_lib.py(...         0.00%       0.784us        16.67%       15.151s       15.151s       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/usage/usage_lib.py(...        16.67%       15.151s        16.67%       15.151s       15.151s       0.000us         0.00%       0.000us       0.000us             1  
+                                  <string>(1): <module>         0.00%       0.768us        16.67%       15.151s       15.151s       0.000us         0.00%     736.506ms     736.506ms             1  
+              multiprocessing/spawn.py(122): spawn_main         0.00%       1.072us        16.67%       15.151s       15.151s       0.000us         0.00%     736.506ms     736.506ms             1  
+                   multiprocessing/spawn.py(135): _main         0.00%       0.848us        16.67%       15.151s       15.151s       0.000us         0.00%     736.506ms     736.506ms             1  
+            multiprocessing/process.py(314): _bootstrap         0.00%       1.040us        16.67%       15.151s       15.151s       0.000us         0.00%     736.506ms     736.506ms             1  
+                   multiprocessing/process.py(108): run         0.00%       1.424us        16.67%       15.151s       15.151s       0.000us         0.00%     736.506ms     736.506ms             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/engine/core.py(1...         0.00%       0.896us        16.67%       15.151s       15.151s       0.000us         0.00%     736.506ms     736.506ms             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/fault_tolerance/...         0.00%       0.320us        16.67%       15.151s       15.151s       0.000us         0.00%     736.506ms     736.506ms             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/engine/core.py(1...         0.00%     109.744us        16.67%       15.151s       15.151s       0.000us         0.00%     736.506ms     736.506ms             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/engine/core.py(1...         0.00%      18.976us        11.03%       10.024s       10.024s       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/engine/core.py(1...         0.00%       1.136us         0.00%     303.920us     303.920us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/engine/core.py(1...         0.00%       9.232us         0.00%     302.784us     302.784us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/engine/core.py(1...         0.00%       0.832us         0.00%     266.864us     266.864us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/engine/core.py(7...         0.00%       0.576us         0.00%     266.032us     266.032us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/executor/abstrac...         0.00%       0.864us         0.00%     265.456us     265.456us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/executor/uniproc...         0.00%       1.968us         0.00%     264.592us     264.592us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/serial_utils.py(...         0.00%       2.400us         0.00%     259.072us     259.072us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/v1/worker/gpu_worke...         0.00%       1.136us         0.00%     256.672us     256.672us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/profiler/wrapper.py...         0.00%       0.624us         0.00%     255.536us     255.536us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/profiler/wrapper.py...         0.00%       1.008us         0.00%     254.912us     254.912us       0.000us         0.00%       0.000us       0.000us             1  
+/home/redhat-et/lkesem/vllm/vllm/profiler/wrapper.py...         0.00%       2.768us         0.00%     253.904us     253.904us       0.000us         0.00%       0.000us       0.000us             1  
+                torch/profiler/profiler.py(1128): start         0.00%       0.976us         0.00%     237.248us     237.248us       0.000us         0.00%       0.000us       0.000us             1  
+      torch/profiler/profiler.py(1262): _transit_action         0.00%       1.392us         0.00%     236.272us     236.272us       0.000us         0.00%       0.000us       0.000us             1  
+           torch/profiler/profiler.py(342): start_trace         0.00%      16.128us         0.00%     234.880us     234.880us       0.000us         0.00%       0.000us       0.000us             1  
+          torch/autograd/profiler.py(414): _start_trace         0.00%      32.160us         0.00%      32.976us      32.976us       0.000us         0.00%       0.000us       0.000us             1  
+                    <built-in function perf_counter_ns>         0.00%       1.056us         0.00%       1.056us       0.528us       0.000us         0.00%       0.000us       0.000us             2  
+     torch/profiler/profiler.py(538): add_metadata_json         0.00%       7.248us         0.00%      10.096us       2.019us       0.000us         0.00%       0.000us       0.000us             5  
+<built-in method _add_metadata_json of pybind11_buil...         0.00%       2.848us         0.00%       2.848us       0.570us       0.000us         0.00%       0.000us       0.000us             5  
+<built-in method kineto_available of pybind11_builti...         0.00%       0.288us         0.00%       0.288us       0.288us       0.000us         0.00%       0.000us       0.000us             1  
+torch/profiler/profiler.py(554): _get_distributed_in...         0.00%      19.136us         0.00%     142.624us     142.624us       0.000us         0.00%       0.000us       0.000us             1  
+        torch/distributed/__init__.py(17): is_available         0.00%       1.536us         0.00%       2.928us       2.928us       0.000us         0.00%       0.000us       0.000us             1  
+                            <built-in function hasattr>         0.00%     139.200us         0.00%     139.200us       0.174us       0.000us         0.00%       0.000us       0.000us           801  
+torch/distributed/distributed_c10d.py(1394): is_init...         0.00%       3.216us         0.00%       5.344us       1.069us       0.000us         0.00%       0.000us       0.000us             5  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 90.904s
+Self CUDA time total: 735.542ms
+
