@@ -155,18 +155,18 @@ nsys profile \
 
 ## Architecture Preview
 
-![Model Architecture Mapping](./images/ModelArchAgent.png)
+![Model Architecture Mapping](./docs/images/ModelArchAgent.png)
 
 ## Screenshots
 
 Top-level model view:
-![Top view](./images/qwen3_1.png)
+![Top view](./docs/images/qwen3_1.png)
 
 Decoder layer detail:
-![Decoder layer](./images/qwen3_2.png)
+![Decoder layer](./docs/images/qwen3_2.png)
 
 Kernel drill-down:
-![Kernel detail](./images/qwen3_3.png)
+![Kernel detail](./docs/images/qwen3_3.png)
 
 ## Roadmap
 
