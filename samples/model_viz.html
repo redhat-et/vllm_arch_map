@@ -1030,9 +1030,9 @@
       const bar = d3.select('#tabs').html('');
       if (W && W.requests && W.requests.length) {
         bar.append('button').classed('tab-btn', true).attr('data-tab', 'workload').text('Workload').on('click', () => switchTab('workload'));
-        bar.append('button').classed('tab-btn', true).attr('data-tab', 'inspector').text('Inspector').on('click', () => switchTab('inspector'));
-      } else if (P && P.merged_tree) {
-        bar.append('button').classed('tab-btn', true).attr('data-tab', 'inspector').text('Inspector').on('click', () => switchTab('inspector'));
+      }
+      if (P && P.merged_tree) {
+        bar.append('button').classed('tab-btn', true).attr('data-tab', 'profiler').text('Profiler').on('click', () => switchTab('profiler'));
       }
       if (M && M.module_tree) {
         bar.append('button').classed('tab-btn', true).attr('data-tab', 'arch').text('Architecture').on('click', () => switchTab('arch'));
@@ -1045,7 +1045,7 @@
       d3.select('#svg').style('display', tab === 'arch' ? 'block' : 'none');
       d3.select('#bc').style('display', tab === 'arch' ? 'flex' : 'none');
       d3.select('#workload-view').style('display', tab === 'workload' ? 'block' : 'none');
-      d3.select('#inspector-view').style('display', tab === 'inspector' ? 'block' : 'none');
+      d3.select('#inspector-view').style('display', tab === 'profiler' ? 'block' : 'none');
 
       if (tab === 'arch') {
         if (G) d3.select('#t').text(G.model + ' — Model Execution');
@@ -1055,10 +1055,10 @@
         d3.select('#t').text('Workload Dashboard');
         d3.select('#inf').text('');
         vWorkload();
-      } else if (tab === 'inspector') {
-        d3.select('#t').text('Request Inspector');
+      } else if (tab === 'profiler') {
+        d3.select('#t').text('Profiler');
         d3.select('#inf').text('');
-        vInspector(inspectReqIdx);
+        vProfiler(inspectReqIdx);
       }
     }
 
@@ -1084,304 +1084,345 @@
       if (stats.output_throughput != null) addChip('Output', stats.output_throughput.toFixed(1) + ' tok/s');
       if (stats.total_token_throughput != null) addChip('Total', stats.total_token_throughput.toFixed(1) + ' tok/s');
 
-      // ── Request Timeline (Gantt chart, time=0 at first request) ──
-      const ttfts = reqs.map(r => r.ttft_ms || 0);
-      const medTtft = ttfts.slice().sort((a, b) => a - b)[Math.floor(ttfts.length / 2)];
-      const maxEnd = Math.max(...reqs.map(r => (r.start_ms || 0) + (r.latency_ms || 0)));
+      // Tag each request with its original index for click-to-inspect
+      reqs.forEach((r, i) => { r._idx = i; });
 
-      const timeline = el.append('div').classed('wl-section', true);
-      timeline.append('div').classed('wl-title', true).text('Request Timeline');
+      // ── Scaling Behavior (Scatter Plots) ──
+      const inputToks = reqs.map(r => r.input_tokens || 0);
+      const tokLo = Math.min(...inputToks), tokHi = Math.max(...inputToks);
+      const hasSpectrum = tokHi > tokLo;
+      const queueVals = reqs.map(r => r.queue_ms || 0).sort((a,b) => a - b);
+      const queueP75 = queueVals[Math.floor(queueVals.length * 0.75)] || 1;
+      let ttftDots, decDots;
 
-      const barW = 600, barH = 20;
-      const scale = barW / (maxEnd || 1);
+      if (hasSpectrum) {
+        const scSec = el.append('div').classed('wl-section', true);
+        scSec.append('div').classed('wl-title', true).text('Scaling: Latency vs Input Length');
 
-      reqs.forEach((req, i) => {
-        const isHotspot = (req.ttft_ms || 0) > medTtft * 2;
-        const row = timeline.append('div').classed('req-row', true).classed('hotspot', isHotspot)
-          .on('click', () => { inspectReqIdx = i; switchTab('inspector'); });
+        const sM = {top: 16, right: 14, bottom: 34, left: 56};
+        const halfW = 300, sH = 180;
+        const pW = halfW - sM.left - sM.right, pH = sH - sM.top - sM.bottom;
+        function drawScatter(parent, xKey, xLabel, yKey, title, baseColor) {
+          const xVals = reqs.map(d => d[xKey] || 0);
+          const xLo2 = Math.min(...xVals), xHi2 = Math.max(...xVals);
+          const xS2 = d3.scaleLinear().domain([xLo2 * 0.9, xHi2 * 1.05]).range([0, pW]);
+          const yMax = Math.max(...reqs.map(d => d[yKey] || 0)) * 1.15 || 1;
+          const yS = d3.scaleLinear().domain([0, yMax]).range([pH, 0]);
+          const svg = parent.append('svg').attr('width', halfW).attr('height', sH);
+          const g = svg.append('g').attr('transform', `translate(${sM.left},${sM.top})`);
+          g.append('g').attr('transform', `translate(0,${pH})`).call(d3.axisBottom(xS2).ticks(5)).selectAll('text').attr('fill', '#8b949e').attr('font-size', '8px');
+          g.selectAll('.domain,.tick line').attr('stroke', '#30363d');
+          g.append('g').call(d3.axisLeft(yS).ticks(5).tickFormat(v => fmtMs(v))).selectAll('text').attr('fill', '#8b949e').attr('font-size', '8px');
+          g.selectAll('.domain,.tick line').attr('stroke', '#30363d');
+          svg.append('text').attr('x', halfW / 2).attr('y', 11).attr('text-anchor', 'middle').attr('fill', '#c9d1d9').attr('font-size', '10px').attr('font-weight', '600').text(title);
+          svg.append('text').attr('x', halfW / 2).attr('y', sH - 2).attr('text-anchor', 'middle').attr('fill', '#8b949e').attr('font-size', '8px').text(xLabel);
+          const dots = g.selectAll('.dot').data(reqs).enter().append('circle')
+            .attr('cx', d => xS2(d[xKey] || 0))
+            .attr('cy', d => yS(d[yKey] || 0))
+            .attr('r', 4.5)
+            .attr('fill', d => (d.queue_ms || 0) > queueP75 ? '#f85149' : baseColor)
+            .attr('fill-opacity', 0.75)
+            .attr('stroke', '#0d1117').attr('stroke-width', 0.5);
+          dots.append('title').text(d => `${d.label}: ${d[xKey]||0} ${xLabel.toLowerCase()} → ${fmtMs(d[yKey]||0)}${(d.queue_ms||0)>5 ? ' (queued '+fmtMs(d.queue_ms)+')' : ''}`);
+          return dots;
+        }
 
-        row.append('div').classed('req-label', true).text(req.label || `Req-${String(i + 1).padStart(3, '0')}`);
-        row.append('div').classed('req-tokens', true).text(`${req.input_tokens || 0} in / ${req.output_tokens || 0} out`);
+        const scRow = scSec.append('div').style('display', 'flex').style('gap', '4px');
+        ttftDots = drawScatter(scRow, 'input_tokens', 'Input Tokens', 'ttft_ms', 'TTFT vs Input Length', '#58a6ff');
+        decDots = drawScatter(scRow, 'output_tokens', 'Output Tokens', 'decode_ms', 'Decode vs Output Length', '#2ea043');
 
-        const startMs = req.start_ms || 0;
-        const queueMs = req.queue_ms || 0, ttftMs = req.ttft_ms || 0;
-        const decodeMs = Math.max(0, (req.latency_ms || 0) - ttftMs);
-        const totalMs = req.latency_ms || 1;
+        const scLeg = scSec.append('div').style('display', 'flex').style('gap', '16px').style('font-size', '9px').style('margin-top', '4px');
+        [{c:'#58a6ff',t:'Normal'},{c:'#f85149',t:`Queued > p75 (${fmtMs(queueP75)})`},{c:'#2ea043',t:'Decode'}].forEach(l => {
+          const s = scLeg.append('span').style('display','flex').style('align-items','center').style('gap','4px');
+          s.append('span').style('width','8px').style('height','8px').style('background',l.c).style('border-radius','50%').style('display','inline-block');
+          s.append('span').style('color','#8b949e').text(l.t);
+        });
 
-        const svg = row.append('div').classed('req-bar-container', true).append('svg').attr('width', barW + 10).attr('height', barH);
+        // ── Input Length Filter ──
+        const filterRow = scSec.append('div').style('margin','8px 0 2px').style('display','flex').style('align-items','center').style('gap','8px').style('font-size','11px');
+        filterRow.append('span').style('color','#8b949e').text('Filter input tokens:');
+        const inSt = 'width:64px;background:#161b22;border:1px solid #30363d;color:#c9d1d9;padding:3px 6px;border-radius:3px;font-size:11px;font-family:inherit';
+        const minIn = filterRow.append('input').attr('type','number').attr('value',tokLo).attr('min',tokLo).attr('max',tokHi).attr('style',inSt);
+        filterRow.append('span').style('color','#484f58').text('–');
+        const maxIn = filterRow.append('input').attr('type','number').attr('value',tokHi).attr('min',tokLo).attr('max',tokHi).attr('style',inSt);
+        filterRow.append('span').style('color','#484f58').text('tokens');
+        const countLbl = filterRow.append('span').style('color','#58a6ff').style('margin-left','8px');
+        countLbl.text(`Showing all ${reqs.length} requests`);
+        const resetBtn = filterRow.append('button').text('Reset')
+          .attr('style','background:#21262d;color:#8b949e;border:1px solid #30363d;padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;display:none');
 
-        const x0 = startMs * scale;
-        const pW = Math.max(1, ttftMs * scale);
-        const dW = Math.max(1, decodeMs * scale);
+        function applyFilter() {
+          const lo = +minIn.property('value'), hi = +maxIn.property('value');
+          const filt = reqs.filter(r => { const t = r.input_tokens || 0; return t >= lo && t <= hi; });
+          countLbl.text(`Showing ${filt.length} of ${reqs.length} requests`);
+          resetBtn.style('display', (lo > tokLo || hi < tokHi) ? 'inline' : 'none');
+          const inRange = d => { const t = d.input_tokens || 0; return t >= lo && t <= hi; };
+          if (ttftDots) ttftDots.attr('fill-opacity', d => inRange(d) ? 0.75 : 0.08);
+          if (decDots) decDots.attr('fill-opacity', d => inRange(d) ? 0.75 : 0.08);
+          renderFiltered(filt);
+        }
+        minIn.on('input', applyFilter);
+        maxIn.on('input', applyFilter);
+        resetBtn.on('click', () => { minIn.property('value', tokLo); maxIn.property('value', tokHi); applyFilter(); });
+      }
 
-        // TTFT (blue)
-        svg.append('rect').attr('x', x0).attr('y', 2).attr('width', pW).attr('height', barH - 4).attr('fill', isHotspot ? '#f85149' : '#58a6ff').attr('fill-opacity', 0.7);
-        // Decode (green)
-        svg.append('rect').attr('x', x0 + pW).attr('y', 2).attr('width', dW).attr('height', barH - 4).attr('fill', '#2ea043').attr('fill-opacity', 0.6);
+      // ── Filtered Content (Gantt + Metrics) ──
+      const filtEl = el.append('div');
 
-        row.append('div').classed('req-total', true).text(fmtMs(totalMs));
-        row.append('div').classed('req-click-hint', true).text(isHotspot ? 'HOTSPOT' : 'inspect');
+      function renderFiltered(rqs) {
+        filtEl.html('');
+        const COLORS = ['#58a6ff', '#f0883e', '#bc8cff', '#3fb950', '#f85149', '#d2a8ff', '#79c0ff', '#ffa657'];
 
-      });
+        const ttfts = rqs.map(r => r.ttft_ms || 0);
+        const medTtft = ttfts.slice().sort((a, b) => a - b)[Math.floor(ttfts.length / 2)];
+        const maxEnd = Math.max(...rqs.map(r => (r.start_ms || 0) + (r.latency_ms || 0)), 1);
 
-      // Time axis
-      const axisSvg = timeline.append('svg').attr('width', barW + 190).attr('height', 20);
-      const axisG = axisSvg.append('g').attr('transform', `translate(186,0)`);
-      const tScale = d3.scaleLinear().domain([0, maxEnd]).range([0, barW]);
-      axisG.call(d3.axisBottom(tScale).ticks(6).tickFormat(v => fmtMs(v)))
-        .selectAll('text').attr('fill', '#8b949e').attr('font-size', '8px');
-      axisG.selectAll('.domain,.tick line').attr('stroke', '#30363d');
+        // ── Request Timeline (Gantt) ──
+        const timeline = filtEl.append('div').classed('wl-section', true);
+        timeline.append('div').classed('wl-title', true).text('Request Timeline');
 
-      const legend = timeline.append('div').style('margin-top', '8px').style('display', 'flex').style('gap', '16px').style('font-size', '9px');
-      function addLeg(color, label) { const l = legend.append('span').style('display', 'flex').style('align-items', 'center').style('gap', '4px'); l.append('span').style('width', '10px').style('height', '10px').style('background', color).style('border-radius', '2px').style('display', 'inline-block').style('opacity', '0.7'); l.append('span').style('color', '#8b949e').text(label); }
-      addLeg('#484f58', 'Queue');
-      addLeg('#58a6ff', 'TTFT (Prefill)');
-      addLeg('#2ea043', 'Decode');
-      addLeg('#f85149', 'Hotspot (>2x median TTFT)');
+        const barW = 600, barH = 20;
+        const tScale2 = barW / (maxEnd || 1);
+        const TL_LIMIT = 10;
+        let tlShowAll = rqs.length <= TL_LIMIT;
+        const tlContainer = timeline.append('div');
 
-      // ── Compact metric bars (title only — hover for explanation) ──
-      const COLORS = ['#58a6ff', '#f0883e', '#bc8cff', '#3fb950', '#f85149', '#d2a8ff', '#79c0ff', '#ffa657'];
+        function renderTimeline() {
+          tlContainer.html('');
+          const visible = tlShowAll ? rqs : rqs.slice(0, TL_LIMIT);
+          visible.forEach(req => renderTimelineRow(tlContainer, req));
+          if (rqs.length > TL_LIMIT) {
+            const hidden = rqs.length - TL_LIMIT;
+            tlToggleBtn.html(tlShowAll ? `▼ Show first ${TL_LIMIT}` : `▶ Show all ${rqs.length} requests (${hidden} hidden)`);
+          }
+        }
 
-      function addMetric(title, tooltip, values, opts) {
-        opts = opts || {};
-        const sec = el.append('div').classed('metric-section', true);
-        const hd = sec.append('div').classed('metric-header', true);
-        const nm = hd.append('div').classed('metric-name', true).text(title);
-        nm.append('span').classed('tip', true).text(tooltip);
-        const maxVal = Math.max(...values.map(v => v.val), 0.001);
-        values.forEach((v, i) => {
-          const row = sec.append('div').classed('metric-bar-row', true);
-          row.append('div').classed('metric-bar-label', true).text(v.label);
-          const track = row.append('div').classed('metric-bar-track', true);
-          const pct = Math.max(1, v.val / maxVal * 100);
-          const color = v.color || COLORS[i % COLORS.length];
-          track.append('div').classed('metric-bar-fill', true)
-            .style('width', pct + '%').style('background', color).style('opacity', '0.7')
-            .text(v.val > maxVal * 0.15 ? (opts.fmt ? opts.fmt(v.val) : fmtMs(v.val)) : '');
-          row.append('div').classed('metric-bar-value', true).text(opts.fmt ? opts.fmt(v.val) : fmtMs(v.val));
-          if (v.click) row.style('cursor', 'pointer').on('click', v.click);
+        function renderTimelineRow(container, req) {
+          const isHotspot = (req.ttft_ms || 0) > medTtft * 2;
+          const row = container.append('div').classed('req-row', true).classed('hotspot', isHotspot);
+          row.append('div').classed('req-label', true).text(req.label || 'Req');
+          row.append('div').classed('req-tokens', true).text(`${req.input_tokens || 0} in / ${req.output_tokens || 0} out`);
+          const startMs = req.start_ms || 0, ttftMs = req.ttft_ms || 0;
+          const decodeMs = Math.max(0, (req.latency_ms || 0) - ttftMs);
+          const svg = row.append('div').classed('req-bar-container', true).append('svg').attr('width', barW + 10).attr('height', barH);
+          const x0 = startMs * tScale2, pW2 = Math.max(1, ttftMs * tScale2), dW = Math.max(1, decodeMs * tScale2);
+          svg.append('rect').attr('x', x0).attr('y', 2).attr('width', pW2).attr('height', barH - 4).attr('fill', isHotspot ? '#f85149' : '#58a6ff').attr('fill-opacity', 0.7);
+          svg.append('rect').attr('x', x0 + pW2).attr('y', 2).attr('width', dW).attr('height', barH - 4).attr('fill', '#2ea043').attr('fill-opacity', 0.6);
+          row.append('div').classed('req-total', true).text(fmtMs(req.latency_ms || 0));
+          if (isHotspot) row.append('div').classed('req-click-hint', true).text('HOTSPOT');
+        }
+
+        const tlToggleBtn = timeline.append('button')
+          .attr('style', 'background:#21262d;color:#58a6ff;border:1px solid #30363d;padding:4px 12px;border-radius:4px;font-size:10px;cursor:pointer;margin:6px 0')
+          .style('display', rqs.length > TL_LIMIT ? 'inline-flex' : 'none')
+          .on('click', () => { tlShowAll = !tlShowAll; renderTimeline(); });
+        renderTimeline();
+
+        const axisSvg = timeline.append('svg').attr('width', barW + 190).attr('height', 20);
+        const axG = axisSvg.append('g').attr('transform', `translate(186,0)`);
+        const axScale = d3.scaleLinear().domain([0, maxEnd]).range([0, barW]);
+        axG.call(d3.axisBottom(axScale).ticks(6).tickFormat(v => fmtMs(v))).selectAll('text').attr('fill', '#8b949e').attr('font-size', '8px');
+        axG.selectAll('.domain,.tick line').attr('stroke', '#30363d');
+
+        const legend = timeline.append('div').style('margin-top', '8px').style('display', 'flex').style('gap', '16px').style('font-size', '9px');
+        function addLeg(color, label) { const l = legend.append('span').style('display', 'flex').style('align-items', 'center').style('gap', '4px'); l.append('span').style('width', '10px').style('height', '10px').style('background', color).style('border-radius', '2px').style('display', 'inline-block').style('opacity', '0.7'); l.append('span').style('color', '#8b949e').text(label); }
+        addLeg('#484f58', 'Queue');
+        addLeg('#58a6ff', 'TTFT (Prefill)');
+        addLeg('#2ea043', 'Decode');
+        addLeg('#f85149', 'Hotspot (>2x median TTFT)');
+
+        // ── Summary Stats ──
+        const sumSec = filtEl.append('div').classed('wl-section', true);
+        sumSec.append('div').classed('wl-title', true).text('Summary');
+        const sumRow = sumSec.append('div').style('display','flex').style('flex-wrap','wrap').style('gap','6px');
+        function pct(arr, p) { const s = arr.slice().sort((a,b)=>a-b); const k = (s.length-1)*p/100; return s[Math.ceil(k)]; }
+        [{label:'TTFT', key:'ttft_ms', c:'#58a6ff'}, {label:'Decode', key:'decode_ms', c:'#2ea043'}, {label:'Queue', key:'queue_ms', c:'#484f58'}, {label:'ITL', key:'itl_median_ms', c:'#f0883e'}, {label:'E2E', key:'latency_ms', c:'#bc8cff'}].forEach(m => {
+          const vals = rqs.map(r => r[m.key] || 0);
+          if (vals.every(v => v === 0)) return;
+          const chip = sumRow.append('div').style('background','#161b22').style('border','1px solid #30363d').style('border-radius','6px').style('padding','6px 10px').style('font-size','10px').style('min-width','100px');
+          chip.append('div').style('color', m.c).style('font-weight','600').style('margin-bottom','3px').text(m.label);
+          chip.append('div').style('color','#8b949e').html(`p50 <span style="color:#c9d1d9">${fmtMs(pct(vals,50))}</span> · p99 <span style="color:#c9d1d9">${fmtMs(pct(vals,99))}</span>`);
+          chip.append('div').style('color','#8b949e').html(`min <span style="color:#c9d1d9">${fmtMs(Math.min(...vals))}</span> · max <span style="color:#c9d1d9">${fmtMs(Math.max(...vals))}</span>`);
+        });
+
+        if (prom) {
+          const promChip = sumRow.append('div').style('background','#161b22').style('border','1px solid #30363d').style('border-radius','6px').style('padding','6px 10px').style('font-size','10px');
+          promChip.append('div').style('color','#d2a8ff').style('font-weight','600').style('margin-bottom','3px').text('Prometheus');
+          if (prom.kv_cache_usage_pct != null) promChip.append('div').style('color','#8b949e').html(`KV Cache <span style="color:#c9d1d9">${(prom.kv_cache_usage_pct*100).toFixed(1)}%</span>`);
+          if (prom.num_preemptions != null) promChip.append('div').style('color','#8b949e').html(`Preemptions <span style="color:#c9d1d9">${prom.num_preemptions}</span>`);
+        }
+
+        // ── Color-coded Sortable Table ──
+        const tblSec = filtEl.append('div').classed('wl-section', true);
+        tblSec.append('div').classed('wl-title', true).text('Per-Request Data');
+
+        const cols = [
+          {key:'label', label:'Request', numeric:false},
+          {key:'input_tokens', label:'Input', numeric:true},
+          {key:'output_tokens', label:'Output', numeric:true},
+          {key:'ttft_ms', label:'TTFT', numeric:true, ms:true, color:true},
+          {key:'decode_ms', label:'Decode', numeric:true, ms:true, color:true},
+          {key:'queue_ms', label:'Queue', numeric:true, ms:true, color:true},
+          {key:'itl_median_ms', label:'ITL', numeric:true, ms:true, color:true},
+          {key:'latency_ms', label:'Latency', numeric:true, ms:true, color:true},
+        ];
+        if (rqs.some(r => r.kernel_count)) cols.push({key:'kernel_count', label:'Kernels', numeric:true, color:false});
+        if (rqs.some(r => r.kernel_time_ms)) cols.push({key:'kernel_time_ms', label:'GPU Time', numeric:true, ms:true, color:true});
+
+        const colStats = {};
+        cols.forEach(col => {
+          if (!col.color) return;
+          const vals = rqs.map(r => r[col.key] || 0).sort((a,b) => a - b);
+          colStats[col.key] = { p25: vals[Math.floor(vals.length * 0.25)], p75: vals[Math.floor(vals.length * 0.75)] };
+        });
+
+        function cellBg(col, val) {
+          if (!col.color || !colStats[col.key]) return 'transparent';
+          const s = colStats[col.key];
+          if (val <= s.p25) return 'rgba(46, 160, 67, 0.25)';
+          if (val >= s.p75) return 'rgba(248, 81, 73, 0.25)';
+          return 'transparent';
+        }
+
+        const tblStyle = 'width:100%;border-collapse:collapse;font-size:10px;font-family:inherit';
+        const thStyle = 'padding:4px 6px;text-align:right;color:#8b949e;border-bottom:1px solid #30363d;cursor:pointer;user-select:none;white-space:nowrap';
+        const tdStyle = 'padding:3px 6px;text-align:right;color:#c9d1d9;border-bottom:1px solid #21262d;white-space:nowrap';
+
+        const table = tblSec.append('table').attr('style', tblStyle);
+        const thead = table.append('thead');
+        const hRow = thead.append('tr');
+        cols.forEach(col => {
+          hRow.append('th').attr('style', thStyle + (col.numeric ? '' : ';text-align:left'))
+            .text(col.label)
+            .on('click', () => doSort(col.key));
+        });
+
+        let sortKey = 'latency_ms', sortAsc = false;
+        const SHOW_LIMIT = 20;
+        let showAll = rqs.length <= SHOW_LIMIT;
+        const tbody = table.append('tbody');
+
+        function renderTable() {
+          const sorted = [...rqs].sort((a, b) => {
+            let av = a[sortKey], bv = b[sortKey];
+            if (typeof av === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+            av = av || 0; bv = bv || 0;
+            return sortAsc ? av - bv : bv - av;
+          });
+          const visible = showAll ? sorted : sorted.slice(0, SHOW_LIMIT);
+          tbody.selectAll('tr').remove();
+          visible.forEach(r => {
+            const tr = tbody.append('tr')
+              .on('mouseover', function() { d3.select(this).style('background', '#1c2128'); })
+              .on('mouseout', function() { d3.select(this).style('background', 'transparent'); });
+            cols.forEach(col => {
+              const val = r[col.key] || 0;
+              const display = col.ms ? fmtMs(val) : (col.numeric ? val.toLocaleString() : val);
+              tr.append('td').attr('style', tdStyle + (col.numeric ? '' : ';text-align:left'))
+                .style('background', cellBg(col, val))
+                .text(display);
+            });
+          });
+          expandBtn.style('display', rqs.length > SHOW_LIMIT ? 'inline-flex' : 'none')
+            .html(showAll ? `▼ Show top ${SHOW_LIMIT}` : `▶ Show all ${rqs.length} requests`);
+        }
+
+        function doSort(key) {
+          if (sortKey === key) sortAsc = !sortAsc;
+          else { sortKey = key; sortAsc = key === 'label'; }
+          hRow.selectAll('th').each(function(_, i) {
+            const th = d3.select(this);
+            const arrow = cols[i].key === sortKey ? (sortAsc ? ' ▲' : ' ▼') : '';
+            th.text(cols[i].label + arrow);
+          });
+          renderTable();
+        }
+
+        const btnRow = tblSec.append('div').style('display','flex').style('gap','8px').style('margin-top','8px');
+        const expandBtn = btnRow.append('button').html(`▶ Show all ${rqs.length} requests`)
+          .attr('style', 'background:#21262d;color:#58a6ff;border:1px solid #30363d;padding:4px 12px;border-radius:4px;font-size:10px;cursor:pointer;display:inline-flex;align-items:center;gap:4px')
+          .on('click', () => { showAll = !showAll; renderTable(); });
+
+        doSort('latency_ms');
+
+        // ── Download CSV ──
+        const dlBtn = btnRow.append('button').text('Download CSV')
+          .attr('style', 'background:#21262d;color:#8b949e;border:1px solid #30363d;padding:4px 12px;border-radius:4px;font-size:10px;cursor:pointer');
+        dlBtn.on('click', () => {
+          const header = cols.map(c => c.label).join(',');
+          const rows = rqs.map(r => cols.map(c => r[c.key] || 0).join(','));
+          const csv = [header, ...rows].join('\n');
+          const blob = new Blob([csv], {type: 'text/csv'});
+          const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'workload_requests.csv'; a.click();
         });
       }
 
-      const clk = i => () => { inspectReqIdx = i; switchTab('inspector'); };
-
-      addMetric('E2E Latency',
-        'Total time from request submission to final token. Includes queue + prefill + decode.\nHigh variance → scheduling contention or input-length imbalance.',
-        reqs.map((r, i) => ({ label: r.label, val: r.latency_ms || 0, click: clk(i) })));
-
-      addMetric('TTFT',
-        'Time to first token. Dominated by prefill: full input runs through all layers in one pass. Scales with input length.\nHotspot (red) = >2x median — check input length or KV cache pressure.',
-        reqs.map((r, i) => ({ label: r.label, val: r.ttft_ms || 0, color: (r.ttft_ms || 0) > medTtft * 2 ? '#f85149' : '#58a6ff', click: clk(i) })));
-
-      addMetric('Decode',
-        'Time generating output tokens after the first. Each step = one token through all layers. decode = latency - TTFT.\nVariance with similar output lengths → GPU contention or memory bandwidth issue.',
-        reqs.map((r, i) => ({ label: r.label, val: r.decode_ms || 0, color: '#2ea043', click: clk(i) })));
-
-      addMetric('Queue',
-        'Time waiting in vLLM scheduler before processing. Non-zero = engine busy.\nSequential mode should be near-zero. Significant queue → server overload.',
-        reqs.map((r, i) => ({ label: r.label, val: r.queue_ms || 0, color: '#484f58', click: clk(i) })));
-
-      if (reqs.some(r => r.itl_median_ms > 0))
-        addMetric('ITL (median)',
-          'Inter-token latency: time between consecutive decode tokens. Reflects single decode-step cost.\nSpikes → GPU stalls from KV cache eviction or memory pressure. p99 catches jitter.',
-          reqs.map((r, i) => ({ label: r.label, val: r.itl_median_ms || 0, color: '#f0883e', click: clk(i) })));
-
-      if (reqs.some(r => r.kernel_count))
-        addMetric('GPU Kernels',
-          'CUDA kernel launches per request (from nsys NVTX range). Includes GEMM, attention, norms, elementwise.\nEager mode: ~65k/req. torch.compile reduces via fusion.',
-          reqs.filter(r => r.kernel_count).map((r, i) => ({ label: r.label, val: r.kernel_count, color: '#d2a8ff', click: clk(i) })),
-          { fmt: v => v.toLocaleString() });
-
-      if (reqs.some(r => r.kernel_time_ms))
-        addMetric('GPU Time',
-          'Total GPU-side kernel execution time. Actual compute, not wall-clock (excludes launch overhead, memory transfers).',
-          reqs.filter(r => r.kernel_time_ms).map((r, i) => ({ label: r.label, val: r.kernel_time_ms, color: '#79c0ff', click: clk(i) })));
-
-      if (prom) {
-        const pVals = [];
-        if (prom.prefill_sum_s != null) pVals.push({ label: 'Prefill', val: prom.prefill_sum_s * 1000 / reqs.length, color: '#bc8cff' });
-        if (prom.decode_sum_s != null) pVals.push({ label: 'Decode', val: prom.decode_sum_s * 1000 / reqs.length, color: '#d2a8ff' });
-        if (prom.queue_sum_s != null) pVals.push({ label: 'Queue', val: prom.queue_sum_s * 1000 / reqs.length, color: '#484f58' });
-        if (pVals.length)
-          addMetric('Server-Side (Prometheus)',
-            'Aggregated histograms from vLLM /metrics. Server-measured, not client.\nCompare with client TTFT/Decode: server < client → network overhead.',
-            pVals);
-      }
+      renderFiltered(reqs);
     }
 
-    // ═══ Tab 2: Request Inspector ═══
+    // ═══ Tab 2: Profiler ═══
     const REQ_COLORS = ['#58a6ff', '#f0883e', '#bc8cff', '#3fb950', '#f85149', '#d2a8ff', '#79c0ff', '#ffa657'];
 
-    function vInspector(reqIdx) {
+    function vProfiler(reqIdx) {
       const el = d3.select('#inspector-view').html('');
-      const hasW = W && W.requests && W.requests.length;
       const hasP = P && P.merged_tree;
-      if (!hasW && !hasP) { el.append('div').text('No data. Load workload_data.json or per_request_profiles.json.'); return; }
+      if (!hasP) { el.append('div').text('No profile data. Run profile_serve.py then profiler_to_diagram.py --per-request-dir.'); return; }
 
-      if (hasW) {
-        if (reqIdx < 0 || reqIdx >= W.requests.length) reqIdx = 0;
-        inspectReqIdx = reqIdx;
-      } else if (hasP) {
-        if (reqIdx < 0 || reqIdx >= P.count) reqIdx = 0;
-        inspectReqIdx = reqIdx;
-      }
+      if (reqIdx < 0 || reqIdx >= P.count) reqIdx = 0;
+      inspectReqIdx = reqIdx;
 
-      // Back button (to workload if available)
-      if (hasW) el.append('div').classed('insp-back', true).html('&#x2B05; Back to Timeline')
-        .on('click', () => switchTab('workload'));
+      // ═══ Per-Request Module Tree (from profile_serve.py) ═══
+      const labels = P.request_labels || [];
+      const n = labels.length;
+      const tree = P.merged_tree;
 
-      // ── Workload summary pills (from benchmark data) ──
-      if (hasW) {
-        const req = W.requests[reqIdx];
-        el.append('div').classed('wl-title', true)
-          .text(`Request Inspector: ${req.label}  (E2E: ${fmtMs(req.latency_ms || 0)})`);
-        const pills = el.append('div').classed('insp-summary', true);
-        function addPill(label, value, hotspot) {
-          const p = pills.append('span').classed('insp-pill', true).classed('hotspot-pill', hotspot || false);
-          p.append('span').classed('pill-label', true).text(label + ': ');
-          p.append('span').classed('pill-value', true).text(value);
-        }
-        const qMs = req.queue_ms || 0, tMs = req.ttft_ms || 0, dMs = Math.max(0, (req.latency_ms || 0) - tMs), eMs = req.latency_ms || 1;
-        const ttfts = W.requests.map(r => r.ttft_ms).filter(v => v != null).sort((a, b) => a - b);
-        const medTtft = ttfts.length ? ttfts[Math.floor(ttfts.length / 2)] : 0;
-        const isHotTtft = tMs > medTtft * 2;
-        addPill('Queue', fmtMs(qMs));
-        addPill('TTFT', fmtMs(tMs), isHotTtft);
-        addPill('Decode', fmtMs(dMs));
-        addPill('Input Tokens', String(req.input_tokens || 0));
-        addPill('Output Tokens', String(req.output_tokens || 0));
-        if (req.kernel_count) addPill('GPU Kernels', String(req.kernel_count));
-        if (req.kernel_time_ms) addPill('GPU Time', fmtMs(req.kernel_time_ms));
-        if (req.id) addPill('ID', req.id);
+      el.append('div').classed('wl-title', true)
+        .text('Hierarchical Call Tree (per-request timing)');
+      const profMode = (P.mode || 'eager').charAt(0).toUpperCase() + (P.mode || 'eager').slice(1);
+      const modeColor = P.mode === 'compiled' ? '#58a6ff' : '#f0883e';
+      el.append('div').style('font-size', '10px').style('color', '#8b949e').style('margin-bottom', '8px')
+        .html(`Mode: <span style="color:${modeColor};font-weight:bold">${profMode}</span>`
+            + (P.mode === 'compiled' ? ' — compiled execution flattens nn.Module hierarchy.' : ' — full nn.Module hierarchy.'));
 
-        // Timing breakdown bar
-        const brkSection = el.append('div').style('margin-top', '16px').style('margin-bottom', '16px');
-        const brkW = 700, brkH = 32;
-        const brkSvg = brkSection.append('svg').attr('width', brkW + 200).attr('height', brkH + 30);
-        const qPct = qMs / eMs, tPct = tMs / eMs, dPct = dMs / eMs;
-        const qBW = Math.max(qMs > 0 ? 4 : 0, qPct * brkW), tBW = Math.max(4, tPct * brkW), dBW = Math.max(4, dPct * brkW);
-        brkSvg.append('rect').attr('x', 0).attr('y', 0).attr('width', qBW).attr('height', brkH).attr('rx', 3).attr('fill', '#484f58');
-        brkSvg.append('rect').attr('x', qBW).attr('y', 0).attr('width', tBW).attr('height', brkH).attr('fill', isHotTtft ? '#f85149' : '#58a6ff').attr('fill-opacity', 0.7);
-        brkSvg.append('rect').attr('x', qBW + tBW).attr('y', 0).attr('width', dBW).attr('height', brkH).attr('fill', '#2ea043').attr('fill-opacity', 0.6);
-        if (qBW >= 4) brkSvg.append('text').attr('x', qBW / 2).attr('y', brkH + 14).attr('text-anchor', 'middle').attr('fill', '#8b949e').attr('font-size', '9px').text(`Queue: ${fmtMs(qMs)}`);
-        brkSvg.append('text').attr('x', qBW + tBW / 2).attr('y', brkH + 14).attr('text-anchor', 'middle').attr('fill', '#8b949e').attr('font-size', '9px').text(`TTFT: ${fmtMs(tMs)} (${(tPct * 100).toFixed(1)}%)`);
-        brkSvg.append('text').attr('x', qBW + tBW + dBW / 2).attr('y', brkH + 14).attr('text-anchor', 'middle').attr('fill', '#8b949e').attr('font-size', '9px').text(`Decode: ${fmtMs(dMs)} (${(dPct * 100).toFixed(1)}%)`);
-        if (qBW > 30) brkSvg.append('text').attr('x', qBW / 2).attr('y', brkH / 2 + 4).attr('text-anchor', 'middle').attr('fill', '#e6edf3').attr('font-size', '10px').text('Queue');
-        if (tBW > 40) brkSvg.append('text').attr('x', qBW + tBW / 2).attr('y', brkH / 2 + 4).attr('text-anchor', 'middle').attr('fill', '#fff').attr('font-size', '10px').text('TTFT');
-        if (dBW > 40) brkSvg.append('text').attr('x', qBW + tBW + dBW / 2).attr('y', brkH / 2 + 4).attr('text-anchor', 'middle').attr('fill', '#fff').attr('font-size', '10px').text('Decode');
-        brkSvg.append('text').attr('x', qBW + tBW + dBW + 8).attr('y', brkH / 2 + 4).attr('fill', '#e6edf3').attr('font-size', '10px').text(fmtMs(eMs));
-      } // end if(hasW)
+      // Request selector
+      const sel = el.append('div').classed('req-sel', true);
+      labels.forEach((l, i) => {
+        sel.append('button').classed('req-sel-btn', true).classed('active', i === inspectReqIdx)
+          .style('color', REQ_COLORS[i % REQ_COLORS.length])
+          .style('border-color', i === inspectReqIdx ? REQ_COLORS[i % REQ_COLORS.length] : '#30363d')
+          .text(l)
+          .on('click', () => { inspectReqIdx = i; vProfiler(i); });
+      });
 
-      // ═══ Merged Per-Request Module Tree (from profile_serve.py) ═══
-      if (hasP) {
-        const labels = P.request_labels || [];
-        const n = labels.length;
-        const tree = P.merged_tree;
+      // Column header
+      const hdr = el.append('div').classed('mt-header', true);
+      hdr.append('span').classed('mt-cls', true).text('Module / Op');
+      labels.forEach((l, i) => {
+        hdr.append('span').classed('mt-val', true)
+          .style('color', REQ_COLORS[i % REQ_COLORS.length])
+          .style('font-weight', i === inspectReqIdx ? 'bold' : 'normal')
+          .text(l);
+      });
+      hdr.append('span').classed('mt-pct', true).text('% parent');
 
-        el.append('div').classed('wl-title', true).style('margin-top', '20px')
-          .text('Hierarchical Call Tree (per-request timing)');
+      // Split layout: tree on left, layer variance chart on right
+      const splitDiv = el.append('div').classed('mt-split', true).style('margin-top', '4px');
+      const treeEl = splitDiv.append('div').classed('mt-tree-col', true);
+      const chartCol = splitDiv.append('div').classed('mt-chart-col', true)
+        .style('display', 'none');
+      chartCol.append('div').classed('mt-chart-title', true);
+      chartCol.append('div').classed('mt-chart-subtitle', true);
+      chartCol.append('div').classed('mt-chart-bars', true);
 
-        // Request selector
-        const sel = el.append('div').classed('req-sel', true);
-        labels.forEach((l, i) => {
-          sel.append('button').classed('req-sel-btn', true).classed('active', i === inspectReqIdx)
-            .style('color', REQ_COLORS[i % REQ_COLORS.length])
-            .style('border-color', i === inspectReqIdx ? REQ_COLORS[i % REQ_COLORS.length] : '#30363d')
-            .text(l)
-            .on('click', () => { inspectReqIdx = i; vInspector(i); });
-        });
+      // Layer variance chart updater
+      window._layerChartCol = chartCol;
+      window._layerChartReqIdx = inspectReqIdx;
+      window._layerChartLabels = labels;
 
-        // Column header
-        const hdr = el.append('div').classed('mt-header', true);
-        hdr.append('span').classed('mt-cls', true).text('Module / Op');
-        labels.forEach((l, i) => {
-          hdr.append('span').classed('mt-val', true)
-            .style('color', REQ_COLORS[i % REQ_COLORS.length])
-            .style('font-weight', i === inspectReqIdx ? 'bold' : 'normal')
-            .text(l);
-        });
-        hdr.append('span').classed('mt-pct', true).text('% parent');
+      mtRenderNode(treeEl, tree, 0, null, labels, 0);
 
-        // Split layout: tree on left, layer variance chart on right
-        const splitDiv = el.append('div').classed('mt-split', true).style('margin-top', '4px');
-        const treeEl = splitDiv.append('div').classed('mt-tree-col', true);
-        const chartCol = splitDiv.append('div').classed('mt-chart-col', true)
-          .style('display', 'none');
-        chartCol.append('div').classed('mt-chart-title', true);
-        chartCol.append('div').classed('mt-chart-subtitle', true);
-        chartCol.append('div').classed('mt-chart-bars', true);
-
-        // Layer variance chart updater
-        window._layerChartCol = chartCol;
-        window._layerChartReqIdx = inspectReqIdx;
-        window._layerChartLabels = labels;
-
-        mtRenderNode(treeEl, tree, 0, null, labels, 0);
-
-        // Per-layer heatmap (if collapsed layers exist)
-        mtRenderHeatmaps(el, tree, labels);
-      } else if (!hasW) {
-        el.append('div').classed('mod-warn', true)
-          .text('No per-request profile data. Run profile_serve.py to capture per-request traces, then profiler_to_diagram.py --per-request-dir to process them.');
-      }
-
-      // ── Workload: kernel table, ITL, navigation (only if W available) ──
-      if (hasW) {
-        const req = W.requests[reqIdx];
-        const kernels = req.top_kernels || [];
-        if (kernels.length) {
-          const kSection = el.append('div').classed('wl-section', true).style('margin-top', '20px');
-          kSection.append('div').classed('wl-title', true).text(`Top Kernels — ${req.label} (${kernels.length} unique)`);
-          const top10 = kernels.slice(0, 10);
-          const maxKDur = Math.max(...top10.map(k => k.total_dur_ns || 0));
-          const totalReqDur = kernels.reduce((s, k) => s + (k.total_dur_ns || 0), 0);
-          const barW = 500, rowH = 24, chartH = top10.length * rowH + 10;
-          const chart = kSection.append('svg').attr('width', 900).attr('height', chartH);
-          top10.forEach((k, i) => {
-            const y = i * rowH + 4;
-            const bw = Math.max(2, barW * (k.total_dur_ns || 0) / (maxKDur || 1));
-            const pct = totalReqDur ? ((k.total_dur_ns || 0) / totalReqDur * 100).toFixed(1) : '0';
-            const shortName = (k.name || '').length > 50 ? (k.name || '').slice(0, 47) + '...' : (k.name || '');
-            chart.append('rect').attr('x', 0).attr('y', y).attr('width', bw).attr('height', rowH - 4).attr('rx', 3)
-              .attr('fill', '#58a6ff').attr('fill-opacity', 0.3).attr('stroke', '#58a6ff').attr('stroke-width', 1);
-            chart.append('text').attr('x', bw + 6).attr('y', y + rowH / 2 + 1).attr('fill', '#c9d1d9').attr('font-size', '9px').attr('dominant-baseline', 'middle')
-              .text(`${shortName}  ${k.count || 0}x  ${fmtNs(k.total_dur_ns || 0)}  ${pct}%`);
-          });
-        }
-
-        // ITL sparkline
-        const itls = req.itl_ms || [];
-        if (itls.length > 1) {
-          const itlSection = el.append('div').classed('wl-section itl-chart', true);
-          itlSection.append('div').classed('wl-title', true).text(`Inter-Token Latency (${itls.length} tokens)`);
-          const chartW = Math.min(800, itls.length * 4 + 60), chartH = 100, pad = { t: 10, r: 20, b: 24, l: 50 };
-          const innerW = chartW - pad.l - pad.r, innerH = chartH - pad.t - pad.b;
-          const svg = itlSection.append('svg').attr('width', chartW).attr('height', chartH);
-          const g = svg.append('g').attr('transform', `translate(${pad.l},${pad.t})`);
-          const xScale = d3.scaleLinear().domain([0, itls.length - 1]).range([0, innerW]);
-          const yMax = Math.max(...itls) * 1.1;
-          const yScale = d3.scaleLinear().domain([0, yMax]).range([innerH, 0]);
-          g.append('g').call(d3.axisLeft(yScale).ticks(4).tickFormat(v => fmtMs(v))).selectAll('text').attr('fill', '#8b949e').attr('font-size', '8px');
-          g.selectAll('.domain,.tick line').attr('stroke', '#30363d');
-          g.append('g').attr('transform', `translate(0,${innerH})`).call(d3.axisBottom(xScale).ticks(Math.min(10, itls.length)).tickFormat(d => `T${d}`)).selectAll('text').attr('fill', '#8b949e').attr('font-size', '7px');
-          const line = d3.line().x((_, i) => xScale(i)).y(d => yScale(d));
-          g.append('path').datum(itls).attr('d', line).attr('fill', 'none').attr('stroke', '#58a6ff').attr('stroke-width', 1.5);
-          const sortedItl = [...itls].sort((a, b) => a - b);
-          const medItl = sortedItl[Math.floor(sortedItl.length / 2)];
-          g.append('line').attr('x1', 0).attr('x2', innerW).attr('y1', yScale(medItl)).attr('y2', yScale(medItl))
-            .attr('stroke', '#f0883e').attr('stroke-width', 1).attr('stroke-dasharray', '4,3');
-          g.append('text').attr('x', innerW + 4).attr('y', yScale(medItl) + 3).attr('fill', '#f0883e').attr('font-size', '8px').text(`med: ${fmtMs(medItl)}`);
-        }
-
-        // Request navigation
-        if (W.requests.length > 1) {
-          const navDiv = el.append('div').style('margin-top', '20px').style('display', 'flex').style('gap', '8px');
-          if (reqIdx > 0) navDiv.append('button').classed('tab-btn', true).style('border', '1px solid #30363d').style('border-radius', '4px').text('< Previous')
-            .on('click', () => { inspectReqIdx = reqIdx - 1; vInspector(inspectReqIdx); });
-          if (reqIdx < W.requests.length - 1) navDiv.append('button').classed('tab-btn', true).style('border', '1px solid #30363d').style('border-radius', '4px').text('Next >')
-            .on('click', () => { inspectReqIdx = reqIdx + 1; vInspector(inspectReqIdx); });
-        }
-      }
+      // Per-layer heatmap (if collapsed layers exist)
+      mtRenderHeatmaps(el, tree, labels);
 
       // Architecture link
       if (M && M.module_tree) {
@@ -1695,7 +1736,7 @@
 
         // Layer column headers
         const hdrRow = hmContainer.append('div').style('display', 'flex').style('align-items', 'center').style('margin-bottom', '2px');
-        hdrRow.append('span').style('min-width', '70px').style('font-size', '8px').style('color', '#484f58').text('');
+        hdrRow.append('span').style('width', '160px').style('flex-shrink', '0').style('font-size', '8px').style('color', '#484f58').text('');
         for (let l = 0; l < numLayers; l++) {
           hdrRow.append('span').style('width', '16px').style('text-align', 'center').style('font-size', '7px').style('color', '#484f58').text(l);
         }
@@ -1703,7 +1744,7 @@
         // One row per request
         prl.forEach((layers, ri) => {
           const row = hmContainer.append('div').style('display', 'flex').style('align-items', 'center').style('margin-bottom', '1px');
-          row.append('span').style('min-width', '70px').style('font-size', '9px').style('font-weight', 'bold')
+          row.append('span').style('width', '160px').style('flex-shrink', '0').style('font-size', '9px').style('font-weight', 'bold')
             .style('color', REQ_COLORS[ri % REQ_COLORS.length]).text(labels[ri]);
 
           const avgDur = layers.reduce((s, d) => s + d, 0) / layers.length;

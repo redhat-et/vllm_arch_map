@@ -608,11 +608,21 @@ def process_per_request_traces(per_request_dir, out_dir):
     out_path = Path(out_dir) / "per_request_profiles.json"
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-    traces = sorted(req_dir.glob("request_*.json")) + sorted(req_dir.glob("request_*.json.gz"))
+    traces = sorted(req_dir.glob("request_[0-9]*.json")) + sorted(req_dir.glob("request_[0-9]*.json.gz"))
     traces.sort(key=lambda p: p.name)
     if not traces:
         print(f"No request_*.json[.gz] files in {req_dir}")
         raise SystemExit(1)
+
+    # Read metadata from request_metadata.json if present
+    meta_path = req_dir / "request_metadata.json"
+    custom_labels = None
+    profile_mode = "eager"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text())
+        custom_labels = [r["label"] for r in meta.get("requests", [])]
+        profile_mode = meta.get("mode", "eager")
+        print(f"Using custom labels from {meta_path.name} (mode: {profile_mode})")
 
     print(f"Processing {len(traces)} per-request traces from {req_dir}...")
 
@@ -622,7 +632,7 @@ def process_per_request_traces(per_request_dir, out_dir):
     kernel_summaries = []
 
     for i, trace_path in enumerate(traces):
-        label = f"Req-{i + 1:03d}"
+        label = custom_labels[i] if custom_labels and i < len(custom_labels) else f"Req-{i + 1:03d}"
         print(f"\n[{label}] {trace_path.name}")
 
         result = process_trace(trace_path)
@@ -650,6 +660,7 @@ def process_per_request_traces(per_request_dir, out_dir):
 
     output = {
         "type": "per_request_profiles",
+        "mode": profile_mode,
         "count": len(trees),
         "request_labels": labels,
         "request_ids": request_ids,
