@@ -11,12 +11,9 @@ This framework dynamically analyzes model topologies and low-level runtime data 
 
 ## Architecture
 
-Two independent data paths feed a single HTML viewer with 3 tabs:
+Two independent data paths feed a single HTML viewer with 4 tabs:
 
 ```
-GPU Host                                              Local Machine
-────────                                              ─────────────
-
 PATH A: Model Structure (one-time per model)
 ─────────────────────────────────────────────
 walk_model.py ──► model_tree.json
@@ -64,16 +61,50 @@ profile_serve.py MODEL
     --per-request-dir         (per-request module tree,         (hierarchical call tree,
                                per-layer timing,                 hotspot detection,
                                kernel correlation)               per-layer variance)
+
+PATH D: A/B Backend Compare (e.g. cutlass vs flashinfer_b12x)
+─────────────────────────────────────────────────────────────
+  ┌─ ab_bench.py ──────► ab_bench.json            (clean latency per workload,
+  │   (no profiling           (TTFT, TPOT, ITL,     no profiling overhead)
+  │    overhead)               throughput)
+  │
+  ├─ ab_nsys.py ───────► nsys/{label}_{workload}.sqlite
+  │   (1 server+nsys          nsys/kernel_diff_{workload}.json
+  │    per workload            nsys/kernel_diff_all.json
+  │    per config)             (per-workload GPU kernel A/B diff)
+  │
+  ├─ profile_serve.py ─► {config_a}/per_request_profiles.json
+  │   (run once per config,   {config_b}/per_request_profiles.json
+  │    traced dispatch:        (module tree + gpu_full kernel names
+  │    module → kernel)         for nsys matching)
+  │
+  │                          ┌───────────────────────┐
+  └──────── all files ──────►│     ab_merge.py       │
+                             │  merges module tree   │
+                             │  + nsys kernel timing │
+                             │  + bench metrics      │
+                             └───────────┬───────────┘
+                                         ▼
+                              ab_compare.json ──► Tab 4: A/B Compare
+                               (merged module tree       (workload metrics cards,
+                                with nsys_ms_a/b,         module tree with A/B bars,
+                                kernel diff table,         nsys kernel diff table
+                                bench metrics)              with Module column)
 ```
 
 | File | What it does |
 |---|---|
 | `walk_model.py` | Walks `nn.Module` tree, captures PyTorch profiler trace with `--with-forward`. Outputs `model_tree.json` + `profiles/*.json` |
-| `flow_support.py` | AST-based forward analysis, used by walk_model.py |
-| `profiler_to_diagram.py` | DFS on raw Chrome trace — builds module hierarchy, correlates CPU ops to GPU kernels, collapses repeated layers. Outputs `model_execution.json` (~0.3MB) |
+| `flow_support.py` | AST-based forward analysis + CUDA launch correlation (links kernels to modules via correlation IDs) |
+| `profiler_to_diagram.py` | DFS on raw Chrome trace — builds module hierarchy, correlates CPU ops to GPU kernels, collapses repeated layers. Stores `gpu_full` (untruncated kernel name) for nsys matching |
 | `profile_serve.py` | Offline per-request profiling using `vllm.LLM`. Profiles N prompts individually with `torch.profiler`. With `--workload-json`, auto-picks Fast/Typical/Slow representatives from workload data |
 | `parse_workload.py` | Merges benchmark JSON + Prometheus metrics into `workload_data.json`. Auto-detects layer count from model config |
-| `model_viz.html` | D3.js single-page viewer with 3 tabs. Loads JSON files. All data-driven, works for any model/GPU |
+| `ab_bench.py` | A/B benchmark without profiling overhead. Runs each config with all workloads (prefill/decode/mix), captures clean TTFT/TPOT/ITL/throughput |
+| `ab_nsys.py` | A/B nsys profiling. Runs one server+nsys cycle **per workload per config** (6 server starts for 3 workloads × 2 configs). Each sqlite contains only that workload's kernels — no timestamp splitting needed |
+| `ab_merge.py` | Merges profiler module tree (traced dispatch) + nsys kernel timing + bench metrics into `ab_compare.json`. Kernel name normalization bridges torch.profiler↔nsys formatting differences |
+| `diff_kernels.py` | Loads two nsys sqlite files, merges kernel stats into A/B diff table sorted by max time. Extracts CPU-side overhead (memcpy, CUDA runtime API, sync) from nsys |
+| `extract_dispatch_chain.py` | Extracts full NVTX op→child ops→CUDA runtime→GPU kernel dispatch chain from nsys sqlite. Uses correlationId for exact GPU linkage. Supports A/B diff mode |
+| `model_viz.html` | D3.js single-page viewer with 4 tabs. Loads JSON files. All data-driven, works for any model/GPU |
 
 ### What each data source provides
 
@@ -95,7 +126,7 @@ profile_serve.py MODEL
 
 ## Key Capabilities
 
-* **Structural Mapping**: Extracts model architectures (embeddings, attention blocks, MLP, MoE routers) and tracks tensor shapes, dtypes, and module hierarchy.
+* **Dispatch Chain**: Extracts full NVTX→RUNTIME→KERNEL dispatch chains from nsys using correlationId. Shows exactly which GPU kernels each PyTorch op dispatches.
 * **Hardware Execution Tracing**: Maps every CPU op to its GPU kernel dispatch — shows cuBLAS GEMM, FlashAttention, fused kernels, and metadata-only ops.
 * **Bottleneck Detection**: Duration bars colored green→red by percentage of parent time. Per-layer variance charts highlight outlier layers.
 * **Interactive Drill-Down**: Click any module to expand in-place. Hover for CPU→GPU dispatch chain with input shapes and kernel names.
@@ -141,11 +172,17 @@ vllm_arch_map/
 │       └── qwen3_serve_trace.sqlite
 ├── tests/
 └── vllm_arch_map/
-    ├── flow_support.py
     ├── __init__.py
+    ├── ab_bench.py
+    ├── ab_merge.py
+    ├── ab_nsys.py
+    ├── diff_kernels.py
+    ├── flow_support.py
+    ├── ncu_profile.py
     ├── parse_workload.py
     ├── profile_serve.py
     ├── profiler_to_diagram.py
+    ├── utils.py
     └── walk_model.py
 ```
 
@@ -210,6 +247,157 @@ python vllm_arch_map/parse_workload.py \
     -o samples/workload_data.json
 ```
 
+### Tab 4: A/B Compare (backend comparison)
+Compare two vLLM backend configs (e.g. cutlass vs flashinfer_b12x) with per-workload kernel timing, module-level attribution, and clean latency metrics.
+
+All steps run on the GPU host. Replace `$MODEL` with your model.
+
+**Step 1: Clean bench metrics (no profiling overhead)**
+
+```bash
+# option 1: use the ab_config.json
+
+python vllm_arch_map/ab_bench.py --config ab_config.json -o traces/ab/
+
+# option 2: sepecify the config on the cli:
+export MODEL="nvidia/Qwen3-30B-A3B-NVFP4"
+python vllm_arch_map/ab_bench.py \
+    --model $MODEL \
+    --config-a "cutlass: --linear-backend cutlass" \
+    --config-b "b12x: --linear-backend flashinfer_b12x --moe-backend flashinfer_b12x --enforce-eager" \
+    --common-flags "--trust-remote-code --gpu-memory-utilization 0.8" \
+    --workload "prefill:1024,1,50" "decode:16,256,50" "mix:512,128,50" \
+    -o traces/ab/
+# → traces/ab/ab_bench.json
+```
+
+**Step 2: Per-workload nsys kernel profiling**
+
+```bash
+# option 1: use the ab_config.json
+python vllm_arch_map/ab_nsys.py --config ab_config.json -o traces/ab/
+# → traces/ab/nsys/{label}_{workload}.sqlite   (6 files: 2 configs × 3 workloads)
+# → traces/ab/nsys/kernel_diff_{workload}.json  (3 per-workload diffs)
+# → traces/ab/nsys/kernel_diff_all.json         (combined)
+
+# option 2: sepecify the config on the cli:
+python vllm_arch_map/ab_nsys.py \
+    --model $MODEL \
+    --config-a "cutlass: --linear-backend cutlass" \
+    --config-b "b12x: --linear-backend flashinfer_b12x --moe-backend flashinfer_b12x --enforce-eager" \
+    --common-flags "--trust-remote-code --gpu-memory-utilization 0.8" \
+    --workload "prefill:1024,1,50" "decode:16,256,50" "mix:512,128,50" \
+    -o traces/ab/
+```
+
+**Step 3: Traced dispatch (module → kernel mapping)**
+
+Run `profile_serve.py` twice per config — prefill-heavy and decode-heavy — to capture
+both prefill and decode kernels. Both runs append traces to the same directory.
+`profiler_to_diagram.py` merges all traces into one tree with full kernel coverage.
+
+```bash
+# Config A — prefill-heavy (captures prefill GEMMs, embedding, etc.)
+python vllm_arch_map/profile_serve.py $MODEL \
+    --num-prompts 3 --input-len 1024 --output-len 4 --max-tokens 4 \
+    --enforce-eager \
+    --linear-backend cutlass \
+    --trust-remote-code --gpu-memory-utilization 0.8 \
+    --profile-dir traces/profiler/cutlass
+
+# Config A — decode-heavy (captures kernel_mha, decode GEMMs, MoE under decode)
+python vllm_arch_map/profile_serve.py $MODEL \
+    --num-prompts 3 --input-len 16 --output-len 64 --max-tokens 64 \
+    --enforce-eager \
+    --linear-backend cutlass \
+    --trust-remote-code --gpu-memory-utilization 0.8 \
+    --profile-dir traces/profiler/cutlass
+
+# Config A — process all 6 traces into one merged tree
+python vllm_arch_map/profiler_to_diagram.py \
+    --per-request-dir traces/profiler/cutlass --out_dir traces/profiler/cutlass/
+
+# Config B — prefill-heavy
+python vllm_arch_map/profile_serve.py $MODEL \
+    --num-prompts 3 --input-len 1024 --output-len 4 --max-tokens 4 \
+    --enforce-eager \
+    --linear-backend flashinfer_b12x --moe-backend flashinfer_b12x \
+    --trust-remote-code --gpu-memory-utilization 0.8 \
+    --profile-dir traces/profiler/b12x
+
+# Config B — decode-heavy
+python vllm_arch_map/profile_serve.py $MODEL \
+    --num-prompts 3 --input-len 16 --output-len 64 --max-tokens 64 \
+    --enforce-eager \
+    --linear-backend flashinfer_b12x --moe-backend flashinfer_b12x \
+    --trust-remote-code --gpu-memory-utilization 0.8 \
+    --profile-dir traces/profiler/b12x
+
+# Config B — process all 6 traces
+python vllm_arch_map/profiler_to_diagram.py \
+    --per-request-dir traces/profiler/b12x --out_dir traces/profiler/b12x/
+# → traces/profiler/cutlass/per_request_profiles.json  (6 traces merged)
+# → traces/profiler/b12x/per_request_profiles.json     (6 traces merged)
+```
+
+**Step 4: Merge (on GPU host)**
+
+```bash
+python vllm_arch_map/ab_merge.py \
+    traces/profiler/cutlass/per_request_profiles.json \
+    traces/profiler/b12x/per_request_profiles.json \
+    --kernel-diff traces/ab/nsys/kernel_diff_all.json \
+    --bench traces/ab/ab_bench.json \
+    --dispatch-dir traces/ab/ \
+    --model-name "nvidia/Qwen3-30B-A3B-NVFP4" \
+    -o samples/ab_compare.json
+```
+
+**Step 5: View (local machine)**
+
+```bash
+python3 -m http.server 8765 --directory samples
+open http://localhost:8765/model_viz.html
+# → auto-detects ab_compare.json and shows A/B Compare tab
+```
+
+### Dispatch Chain (NVTX→RUNTIME→KERNEL, one-time per model)
+
+Extracts the full dispatch chain from NVTX ops through CUDA runtime calls to GPU kernels
+using correlationId for exact attribution. Run once per model — the dispatch structure
+doesn't change between runs.
+
+Requires nsys captures with `--pytorch=autograd-nvtx` (already set in `utils.py`).
+The A/B nsys step (`ab_nsys.py`) produces these automatically.
+
+```bash
+# Extract from a single nsys sqlite (any workload works).
+for f in traces/ab/nsys/*.sqlite; do
+    name=$(basename "$f" .sqlite)
+    python vllm_arch_map/extract_dispatch_chain.py "$f" -o "traces/ab/dispatch_chain_${name}.json"
+done
+
+# Or filter by op name
+python vllm_arch_map/extract_dispatch_chain.py \
+    traces/ab/nsys/cutlass_prefill.sqlite \
+    --op "flashinfer" -o samples/dispatch_chain.json
+
+# A/B diff mode — compare dispatch paths between backends
+python vllm_arch_map/extract_dispatch_chain.py \
+    traces/ab/nsys/cutlass_prefill.sqlite \
+    traces/ab/nsys/b12x_prefill.sqlite \
+    --diff --label-a cutlass --label-b b12x \
+    -o samples/dispatch_diff.json
+```
+
+Output shows the full chain per op: NVTX parent → child aten ops → CUDA runtime calls →
+GPU kernels/memcpy with durations. Example: `vllm::flashinfer_mm_fp4` → `aten::to` →
+`cudaLaunchKernel` → `unrolled_elementwise_kernel (42.1us)`.
+
+**Coverage note:** NVTX covers ops that go through the PyTorch dispatcher.
+Torch.compile fusions, GEMM shape specializations, and CUDA graph replayed kernels
+are not captured — these require inductor graph metadata (planned).
+
 ### Tab 3: Architecture (one-time per model)
 
 Single terminal. Produces `model_execution.json`.
@@ -266,6 +454,22 @@ Decoder layer detail:
 Kernel drill-down:
 ![Kernel detail](./docs/images/qwen3_3.png)
 
+### A/B Compare:
+![A/B Compare](./docs/images/a_b_compare_1.png)
+![A/B Compare](./docs/images/a_b_compare_2.png)
+![A/B Compare](./docs/images/a_b_compare_3.png)
+
+You can see:
+1. Summary Cards — nsys GPU totals (A vs B), delta, kernel count. Tabbed workload card shows GPU time, launch count, memcpy,
+    sync, and top CUDA Runtime API calls per workload (prefill/decode/mix)
+2. Workload Metrics — End-to-end latency from vllm bench serve (no profiling overhead). TTFT, TPOT, ITL, throughput with A/B
+    delta
+3. Module Tree — Module→kernel dispatch traced via torch.profiler, timing from nsys. Shows the nn.Module hierarchy with A/B
+    GPU time at each level
+4. Module Kernel Budget — GPU kernel time grouped by module. Maps nsys kernels back to their nn.Module origin — shows what
+    replaced what between backends
+5. Dispatch Chains — Full NVTX op→child ops→CUDA runtime→GPU kernel chain from nsys correlationId. Side-by-side A/B comparison
+    per workload. Highlights DIVERGENT ops where backends dispatch different kernels.
 ## Roadmap
 
 - [x] Model tree extraction (`walk_model.py` → `model_tree.json`)
@@ -279,8 +483,13 @@ Kernel drill-down:
 - [x] Prometheus metrics integration
 - [x] Auto-detect layer count from model config
 - [x] Per-layer drill-down with variance chart (collapsed ×N + individual layer expansion)
+- [x] A/B backend comparison (cutlass vs flashinfer_b12x) with per-workload nsys kernel diff
+- [x] Traced dispatch: module → kernel mapping via torch.profiler CUDA launch correlation
+- [x] Per-workload nsys separation (separate server+nsys per workload, no timestamp splitting)
+- [x] Kernel name normalization (torch.profiler ↔ nsys template arg format bridging)
+- [x] NVTX structural map extraction (op→kernel via `--pytorch=autograd-nvtx`)
 - [ ] Eager vs Compile diff view
-- [ ] NSYS + NCU kernel profiling: memory bandwidth, compute utilization, bottleneck classification
+- [ ] NCU kernel profiling: memory bandwidth, compute utilization, bottleneck classification
 - [ ] Tensor Parallelism (TP)
 
 # Next quarter: 

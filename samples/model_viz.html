@@ -928,6 +928,91 @@
       margin: 1px;
       cursor: default
     }
+
+    #ab-view {
+      padding: 12px 20px;
+      display: none;
+      max-width: 1100px
+    }
+
+    .ab-summary {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 12px;
+      flex-wrap: wrap
+    }
+
+    .ab-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 10px 16px;
+      min-width: 160px
+    }
+
+    .ab-card-label {
+      font-size: 9px;
+      color: #8b949e;
+      margin-bottom: 4px
+    }
+
+    .ab-card-val {
+      font-size: 16px;
+      font-weight: bold
+    }
+
+    .ab-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 4px;
+      border-radius: 3px;
+      cursor: pointer;
+      min-height: 22px
+    }
+
+    .ab-row:hover {
+      background: #21262d
+    }
+
+    .ab-bar {
+      height: 6px;
+      border-radius: 3px;
+      min-width: 2px;
+      transition: width .2s
+    }
+
+    .ab-kernel-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 4px 2px 28px;
+      font-size: 9px;
+      color: #8b949e;
+      border-radius: 3px
+    }
+
+    .ab-kernel-row:hover {
+      background: #21262d
+    }
+
+    .ab-delta {
+      font-size: 9px;
+      min-width: 54px;
+      text-align: right;
+      font-weight: bold
+    }
+
+    .ab-header {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      border-bottom: 1px solid #21262d;
+      margin-bottom: 4px;
+      font-size: 9px;
+      color: #8b949e
+    }
   </style>
 </head>
 
@@ -941,9 +1026,10 @@
   <svg id="svg"></svg>
   <div id="workload-view"></div>
   <div id="inspector-view"></div>
+  <div id="ab-view"></div>
   <div class="tt" id="tip" style="display:none"></div>
   <script>
-    let G, F, M, W, P, stk = [{ id: 'top' }];
+    let G, F, M, W, P, AB, stk = [{ id: 'top' }];
     let currentTab = 'arch';
     let inspectReqIdx = 0;
 
@@ -1007,9 +1093,15 @@
           P = await d3.json('per_request_profiles.json' + cb);
         } catch (_) { P = null; }
 
+        try {
+          AB = await d3.json('ab_compare.json' + cb);
+        } catch (_) { AB = null; }
+
         buildTabs();
 
-        if (W && W.requests && W.requests.length) {
+        if (AB && AB.merged_tree) {
+          switchTab('ab');
+        } else if (W && W.requests && W.requests.length) {
           switchTab('workload');
         } else if (G && M && M.module_tree) {
           d3.select('#t').text(G.model + ' — Model Execution');
@@ -1037,6 +1129,9 @@
       if (M && M.module_tree) {
         bar.append('button').classed('tab-btn', true).attr('data-tab', 'arch').text('Architecture').on('click', () => switchTab('arch'));
       }
+      if (AB && AB.merged_tree) {
+        bar.append('button').classed('tab-btn', true).attr('data-tab', 'ab').text('A/B Compare').on('click', () => switchTab('ab'));
+      }
     }
 
     function switchTab(tab) {
@@ -1046,6 +1141,7 @@
       d3.select('#bc').style('display', tab === 'arch' ? 'flex' : 'none');
       d3.select('#workload-view').style('display', tab === 'workload' ? 'block' : 'none');
       d3.select('#inspector-view').style('display', tab === 'profiler' ? 'block' : 'none');
+      d3.select('#ab-view').style('display', tab === 'ab' ? 'block' : 'none');
 
       if (tab === 'arch') {
         if (G) d3.select('#t').text(G.model + ' — Model Execution');
@@ -1059,6 +1155,10 @@
         d3.select('#t').text('Profiler');
         d3.select('#inf').text('');
         vProfiler(inspectReqIdx);
+      } else if (tab === 'ab') {
+        d3.select('#t').text('A/B Compare — ' + (AB.model || ''));
+        d3.select('#inf').text(`${AB.label_a} vs ${AB.label_b}`);
+        vABCompare();
       }
     }
 
@@ -1668,8 +1768,9 @@
         gpuName = findK(op.sub_ops);
       }
       if (gpuName) {
-        const short = gpuName.length > 40 ? gpuName.slice(0, 37) + '...' : gpuName;
-        row.append('span').classed('mt-op-gpu', true).text(short).attr('title', gpuName);
+        row.append('span').classed('mt-op-gpu', true)
+          .style('word-break', 'break-all').style('white-space', 'normal')
+          .text(gpuName);
       } else if (gpuNote) {
         row.append('span').classed('mt-op-gpu', true).style('color', '#484f58').text(gpuNote);
       }
@@ -2236,9 +2337,8 @@
         sg.append('text').attr('y', sy).attr('fill', '#58a6ff').attr('font-size', '10px').attr('font-weight', 'bold').text('Kernel Summary');
         sy += 14;
         Object.entries(M.kernel_summary || {}).slice(0, 12).forEach(([name, kv]) => {
-          const short = name.length > 40 ? name.slice(0, 37) + '...' : name;
           sg.append('text').attr('y', sy).attr('fill', '#8b949e').attr('font-size', '8px')
-            .text(`${kv.count}× ${kv.role} — ${short} — ${fmtUs(kv.total_dur_us)}`);
+            .text(`${kv.count}× ${kv.role} — ${name} — ${fmtUs(kv.total_dur_us)}`);
           sy += 12;
         });
       }
@@ -2481,6 +2581,722 @@
         layerBars(rg, mod.all_layer_durs, {
           title: `Per-Layer — ${mod.class}`,
           onClick: i => nav('layer', i),
+        });
+      }
+    }
+
+    // ═══ Tab 4: A/B Compare ═══
+    function vABCompare() {
+      const el = d3.select('#ab-view').html('');
+      if (!AB || !AB.merged_tree) { el.append('div').text('No A/B data. Run ab_merge.py.'); return; }
+
+      const la = AB.label_a, lb = AB.label_b;
+      const hasNsys = AB.nsys && AB.nsys.kernels && AB.nsys.kernels.length;
+
+      // Summary cards — use nsys totals if available
+      const summary = el.append('div').classed('ab-summary', true);
+
+      function addCard(label, val, color) {
+        const card = summary.append('div').classed('ab-card', true);
+        card.append('div').classed('ab-card-label', true).text(label);
+        card.append('div').classed('ab-card-val', true).style('color', color).text(val);
+      }
+
+      if (hasNsys) {
+        const na = AB.nsys.total_ms_a, nb = AB.nsys.total_ms_b;
+        const nd = na > 0 ? (nb - na) / na * 100 : 0;
+        addCard(la + ' GPU (nsys)', fmtMs(na), '#58a6ff');
+        addCard(lb + ' GPU (nsys)', fmtMs(nb), '#f0883e');
+        const dc = nd > 5 ? '#f85149' : nd < -5 ? '#3fb950' : '#8b949e';
+        addCard('Delta', (nd >= 0 ? '+' : '') + nd.toFixed(1) + '%', dc);
+        addCard('Kernels', AB.nsys.kernels.length + ' types', '#8b949e');
+
+        if (AB.nsys_workloads) {
+          const wlNames = Object.keys(AB.nsys_workloads);
+          const wlCard = summary.append('div').classed('ab-card', true).style('min-width', '320px').style('flex', '2');
+          const wlTabs = wlCard.append('div').style('display', 'flex').style('gap', '0').style('margin-bottom', '6px');
+          const wlBody = wlCard.append('div');
+          let activeWl = wlNames[0];
+
+          function renderWl(wl) {
+            activeWl = wl;
+            wlTabs.selectAll('.wl-tab').style('color', function() {
+              return d3.select(this).attr('data-wl') === wl ? '#e6edf3' : '#484f58';
+            }).style('border-bottom', function() {
+              return d3.select(this).attr('data-wl') === wl ? '2px solid #58a6ff' : '2px solid transparent';
+            });
+            wlBody.html('');
+            const nw = AB.nsys_workloads[wl];
+            const ga = nw.total_ms_a, gb = nw.total_ms_b;
+            const launchA = nw.kernels.reduce((s, k) => s + (k.instances_a || 0), 0);
+            const launchB = nw.kernels.reduce((s, k) => s + (k.instances_b || 0), 0);
+            const tbl = wlBody.append('div').style('font-size', '10px').style('line-height', '1.6');
+            const mkRow = (label, vA, vB, fmt, lowerWins) => {
+              const r = tbl.append('div').style('display', 'flex').style('gap', '6px');
+              r.append('span').style('color', '#8b949e').style('min-width', '60px').text(label);
+              const aW = lowerWins ? (vA < vB && vA > 0) : (vA > vB && vA > 0);
+              const bW = lowerWins ? (vB < vA && vB > 0) : (vB > vA && vB > 0);
+              r.append('span').style('color', '#58a6ff').style('min-width', '55px').style('text-align', 'right')
+                .style('font-weight', aW ? 'bold' : 'normal')
+                .style('background', aW ? 'rgba(56,139,253,0.15)' : 'none').style('border-radius', '2px').style('padding', '0 3px')
+                .text(fmt(vA));
+              r.append('span').style('color', '#f0883e').style('min-width', '55px').style('text-align', 'right')
+                .style('font-weight', bW ? 'bold' : 'normal')
+                .style('background', bW ? 'rgba(240,136,62,0.15)' : 'none').style('border-radius', '2px').style('padding', '0 3px')
+                .text(fmt(vB));
+            };
+            mkRow('GPU', ga, gb, fmtMs, true);
+            mkRow('launches', launchA, launchB, v => v > 1000 ? (v/1000).toFixed(0)+'K' : ''+v, true);
+
+            const oa = nw.overhead_a, ob = nw.overhead_b;
+            if (oa || ob) {
+              tbl.append('div').style('border-top', '1px solid #21262d').style('margin', '3px 0').style('height', '0');
+              const oaV = oa || {}, obV = ob || {};
+              if (oaV.memcpy_ms || obV.memcpy_ms)
+                mkRow('memcpy', oaV.memcpy_ms || 0, obV.memcpy_ms || 0, fmtMs, true);
+              if (oaV.sync_ms || obV.sync_ms)
+                mkRow('sync', oaV.sync_ms || 0, obV.sync_ms || 0, fmtMs, true);
+              if ((oaV.runtime || []).length || (obV.runtime || []).length) {
+                const allA = oaV.runtime || [], allB = obV.runtime || [];
+                const mapA = Object.fromEntries(allA.map(r => [r.name, r]));
+                const mapB = Object.fromEntries(allB.map(r => [r.name, r]));
+                const topNames = [...new Set([...allA.slice(0, 5).map(r => r.name), ...allB.slice(0, 5).map(r => r.name)])];
+                topNames.sort((a, b) => Math.max((mapA[b]||{}).total_ms||0, (mapB[b]||{}).total_ms||0)
+                                       - Math.max((mapA[a]||{}).total_ms||0, (mapB[a]||{}).total_ms||0));
+                tbl.append('div').style('color', '#484f58').style('font-size', '8px').style('margin-top', '2px').text('CUDA Runtime (CPU)');
+                topNames.slice(0, 6).forEach(name => {
+                  const va = (mapA[name] || {}).total_ms || 0;
+                  const vb = (mapB[name] || {}).total_ms || 0;
+                  mkRow(name, va, vb, fmtMs, true);
+                });
+              }
+            }
+          }
+
+          wlNames.forEach(wl => {
+            wlTabs.append('span').classed('wl-tab', true).attr('data-wl', wl)
+              .style('cursor', 'pointer').style('padding', '2px 10px').style('font-size', '11px').style('font-weight', 'bold')
+              .text(wl)
+              .on('click', () => renderWl(wl));
+          });
+          renderWl(activeWl);
+        }
+      } else {
+        const totA = AB.total_gpu_us_a, totB = AB.total_gpu_us_b;
+        const totDelta = totA > 0 ? (totB - totA) / totA * 100 : 0;
+        addCard(la + ' GPU', fmtUs(totA), '#58a6ff');
+        addCard(lb + ' GPU', fmtUs(totB), '#f0883e');
+        const dc = totDelta > 5 ? '#f85149' : totDelta < -5 ? '#3fb950' : '#8b949e';
+        addCard('Delta', (totDelta >= 0 ? '+' : '') + totDelta.toFixed(1) + '%', dc);
+      }
+
+      // ── Section 0: Bench metrics per workload ──
+      if (AB.bench) {
+        el.append('div').classed('wl-title', true).style('margin-top', '16px')
+          .text('Workload Metrics');
+        el.append('div').style('font-size', '10px').style('color', '#484f58').style('margin-bottom', '8px')
+          .text('End-to-end latency from vllm bench serve (no profiling overhead)');
+
+        const KEY_METRICS = [
+          'Mean TTFT (ms)', 'Mean TPOT (ms)', 'Mean ITL (ms)',
+          'P99 TTFT (ms)', 'P99 ITL (ms)',
+          'Request throughput (req/s)', 'Output token throughput (tok/s)',
+        ];
+
+        const workloadNames = Object.keys(AB.bench);
+        const benchCard = el.append('div').classed('ab-card', true)
+          .style('min-width', '320px').style('max-width', '600px').style('margin-bottom', '16px');
+        const benchTabs = benchCard.append('div').style('display', 'flex').style('gap', '0').style('margin-bottom', '6px');
+        const benchBody = benchCard.append('div');
+        let activeBench = workloadNames[0];
+
+        function renderBench(wname) {
+          activeBench = wname;
+          benchTabs.selectAll('.bench-tab').style('color', function() {
+            return d3.select(this).attr('data-wl') === wname ? '#e6edf3' : '#484f58';
+          }).style('border-bottom', function() {
+            return d3.select(this).attr('data-wl') === wname ? '2px solid #58a6ff' : '2px solid transparent';
+          });
+          benchBody.html('');
+          const wr = AB.bench[wname];
+          const comp = wr.comparison || {};
+
+          const tbl = benchBody.append('div');
+          const hdr = tbl.append('div').style('display', 'flex').style('gap', '4px')
+            .style('font-size', '8px').style('color', '#484f58').style('margin-bottom', '2px');
+          hdr.append('span').style('flex', '1').text('Metric');
+          hdr.append('span').style('min-width', '60px').style('text-align', 'right').text(la);
+          hdr.append('span').style('min-width', '60px').style('text-align', 'right').text(lb);
+          hdr.append('span').style('min-width', '54px').style('text-align', 'right').text('Delta');
+
+          let winsA = 0, winsB = 0;
+          KEY_METRICS.forEach(key => {
+            const c = comp[key];
+            if (!c) return;
+            const va = c[la], vb = c[lb], dp = c.delta_pct;
+            if (va === 0 && vb === 0) return;
+
+            const row = tbl.append('div').style('display', 'flex').style('gap', '4px')
+              .style('font-size', '9px').style('padding', '1px 0');
+
+            const isThru = key.toLowerCase().includes('throughput');
+            row.append('span').style('flex', '1').style('color', '#8b949e')
+              .text(key.replace(' (ms)', '').replace(' (req/s)', '').replace(' (tok/s)', ''));
+
+            let direction;
+            if (isThru) {
+              direction = dp > 0 ? 'better' : dp < 0 ? 'worse' : '';
+            } else {
+              direction = dp < 0 ? 'better' : dp > 0 ? 'worse' : '';
+            }
+
+            const aWins = (isThru ? va > vb : va < vb) && Math.abs(dp) > 1;
+            const bWins = (isThru ? vb > va : vb < va) && Math.abs(dp) > 1;
+            if (aWins) winsA++;
+            if (bWins) winsB++;
+
+            const aSpan = row.append('span').style('min-width', '60px').style('text-align', 'right')
+              .style('color', '#58a6ff')
+              .style('font-weight', aWins ? 'bold' : 'normal')
+              .text(va.toFixed(1));
+            const bSpan = row.append('span').style('min-width', '60px').style('text-align', 'right')
+              .style('color', '#f0883e')
+              .style('font-weight', bWins ? 'bold' : 'normal')
+              .text(vb.toFixed(1));
+            if (aWins) aSpan.style('background', 'rgba(56,139,253,0.15)').style('border-radius', '2px').style('padding', '0 4px');
+            if (bWins) bSpan.style('background', 'rgba(240,136,62,0.15)').style('border-radius', '2px').style('padding', '0 4px');
+
+            const dc = direction === 'better' ? '#3fb950' : direction === 'worse' ? '#f85149' : '#8b949e';
+            const ds = dp === 0 ? 'match' : (dp >= 0 ? '+' : '') + dp.toFixed(1) + '%';
+            row.append('span').classed('ab-delta', true).style('color', dc).text(ds);
+          });
+
+          const total = winsA + winsB;
+          if (total > 0) {
+            const winner = winsA > winsB ? la : winsB > winsA ? lb : 'tie';
+            const wc = winsA > winsB ? '#58a6ff' : winsB > winsA ? '#f0883e' : '#8b949e';
+            const summaryRow = tbl.append('div').style('display', 'flex').style('gap', '4px')
+              .style('font-size', '10px').style('padding', '4px 0 0 0')
+              .style('border-top', '1px solid #21262d').style('margin-top', '4px');
+            summaryRow.append('span').style('flex', '1').style('color', wc).style('font-weight', 'bold')
+              .text(winner === 'tie' ? `Tie ${winsA}/${total}` : `${winner} wins ${Math.max(winsA,winsB)}/${total}`);
+          }
+        }
+
+        workloadNames.forEach(wl => {
+          benchTabs.append('span').classed('bench-tab', true).attr('data-wl', wl)
+            .style('cursor', 'pointer').style('padding', '2px 10px').style('font-size', '11px').style('font-weight', 'bold')
+            .text(wl)
+            .on('click', () => renderBench(wl));
+        });
+        renderBench(activeBench);
+      }
+
+
+      // ── Section 1: Module tree (structure from profiler) ──
+      el.append('div').classed('wl-title', true).style('margin-top', '16px')
+        .text('Module Tree');
+      el.append('div').style('font-size', '10px').style('color', '#484f58').style('margin-bottom', '6px')
+        .text('Module→kernel dispatch traced via torch.profiler, timing from nsys');
+
+      const treeHdr = el.append('div').classed('ab-header', true);
+      treeHdr.append('span').style('min-width', '14px');
+      treeHdr.append('span').style('min-width', '180px').text('Module / Op');
+      treeHdr.append('span').style('min-width', '70px').style('text-align', 'right').style('color', '#58a6ff').text(la);
+      treeHdr.append('span').style('min-width', '70px').style('text-align', 'right').style('color', '#f0883e').text(lb);
+      treeHdr.append('span').style('min-width', '54px').style('text-align', 'right').text('Delta');
+      treeHdr.append('span').style('flex', '1').style('min-width', '120px');
+
+      const maxTot = Math.max(AB.total_nsys_ms_a || 0, AB.total_nsys_ms_b || 0) * 1000;
+      abRenderNode(el, AB.merged_tree, 0, maxTot);
+
+      // ── Build reverse map: nsys kernel name → module(s) ──
+      const nsysToModule = {};
+      function buildNsysMap(node, path) {
+        const mp = path ? path + ' → ' + node.class : node.class;
+        (node.ops || []).forEach(op => {
+          const info = { module: node.class, path: mp, op: op.op };
+          if (op.nsys_name_a) nsysToModule[op.nsys_name_a] = info;
+          if (op.nsys_name_b) nsysToModule[op.nsys_name_b] = info;
+          (op.nsys_names_a || []).forEach(n => { nsysToModule[n] = info; });
+          (op.nsys_names_b || []).forEach(n => { nsysToModule[n] = info; });
+        });
+        (node.children || []).forEach(c => buildNsysMap(c, mp));
+      }
+      buildNsysMap(AB.merged_tree, '');
+
+      // ── Section 2: Module Kernel Budget ──
+      if (hasNsys) {
+        const titleRow = el.append('div').style('display', 'flex').style('align-items', 'center')
+          .style('gap', '12px').style('margin-top', '24px');
+        titleRow.append('span').classed('wl-title', true).style('margin', '0')
+          .text('Module Kernel Budget');
+
+        const hasWorkloads = AB.nsys_workloads && Object.keys(AB.nsys_workloads).length > 0;
+        if (hasWorkloads) {
+          const sel = titleRow.append('select')
+            .style('background', '#21262d').style('color', '#c9d1d9')
+            .style('border', '1px solid #30363d').style('border-radius', '4px')
+            .style('padding', '2px 6px').style('font-family', 'inherit').style('font-size', '11px');
+          sel.append('option').attr('value', 'all').text('all workloads');
+          Object.keys(AB.nsys_workloads).forEach(wn => {
+            sel.append('option').attr('value', wn).text(wn);
+          });
+          sel.on('change', function() { renderKernelBudget(this.value, +pctSel.property('value')); });
+        }
+
+        const pctSel = titleRow.append('select')
+          .style('background', '#21262d').style('color', '#c9d1d9')
+          .style('border', '1px solid #30363d').style('border-radius', '4px')
+          .style('padding', '2px 6px').style('font-family', 'inherit').style('font-size', '11px');
+        [0, 0.1, 0.5, 1, 2, 5].forEach(v => {
+          pctSel.append('option').attr('value', v).text(v === 0 ? 'all %' : '≥ ' + v + '%');
+        });
+        pctSel.on('change', function() {
+          const wlSel = titleRow.select('select');
+          const wl = wlSel.empty() ? 'all' : wlSel.property('value');
+          renderKernelBudget(wl, +this.value);
+        });
+
+        el.append('div').style('font-size', '10px').style('color', '#484f58').style('margin-bottom', '6px')
+          .text('GPU kernel time grouped by module — shows what replaced what');
+
+        const budgetContainer = el.append('div').attr('id', 'kernel-budget-container');
+
+        function renderKernelBudget(workload, minPct) {
+          if (minPct === undefined) minPct = 0;
+          const container = d3.select('#kernel-budget-container');
+          container.html('');
+          const src = workload === 'all' ? AB.nsys : AB.nsys_workloads[workload];
+          if (!src || !src.kernels) return;
+
+          // Group kernels by module
+          const groups = {};
+          src.kernels.forEach(k => {
+            const traced = nsysToModule[k.name];
+            const mod = traced ? traced.module : '__untraced__';
+            if (!groups[mod]) groups[mod] = { kernels: [], total_a: 0, total_b: 0, path: traced ? traced.path : '' };
+            groups[mod].kernels.push(k);
+            groups[mod].total_a += k.total_ms_a || 0;
+            groups[mod].total_b += k.total_ms_b || 0;
+          });
+
+          // Sort modules by max(total_a, total_b) descending, untraced last
+          const modNames = Object.keys(groups).filter(m => m !== '__untraced__')
+            .sort((a, b) => Math.max(groups[b].total_a, groups[b].total_b) - Math.max(groups[a].total_a, groups[a].total_b));
+          if (groups['__untraced__']) modNames.push('__untraced__');
+
+          const maxMs = Math.max(src.total_ms_a, src.total_ms_b);
+
+          // Sort state
+          if (!renderKernelBudget._sortKey) renderKernelBudget._sortKey = 'pct';
+          if (!renderKernelBudget._sortDir) renderKernelBudget._sortDir = 'desc';
+          const sortKey = renderKernelBudget._sortKey;
+          const sortDir = renderKernelBudget._sortDir;
+
+          const hdrStyle = 'cursor:pointer;user-select:none;';
+          const arrow = (key) => sortKey === key ? (sortDir === 'desc' ? ' ▼' : ' ▲') : '';
+
+          // Header
+          const hdr = container.append('div').classed('ab-header', true);
+          hdr.append('span').style('min-width', '14px');
+          const mkHdr = (text, key, w, color) => {
+            const s = hdr.append('span').style('min-width', w).style('text-align', 'right')
+              .style('cursor', 'pointer').style('user-select', 'none')
+              .text(text + arrow(key));
+            if (color) s.style('color', color);
+            s.on('click', () => {
+              if (renderKernelBudget._sortKey === key) {
+                renderKernelBudget._sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+              } else {
+                renderKernelBudget._sortKey = key;
+                renderKernelBudget._sortDir = 'desc';
+              }
+              renderKernelBudget(workload, minPct);
+            });
+          };
+          hdr.append('span').style('flex', '1').text('Module / Kernel');
+          hdr.append('span').style('min-width', '120px').style('margin', '0 6px')
+            .style('font-size', '9px').style('color', '#484f58').text('A vs B');
+          mkHdr(la, 'a', '70px', '#58a6ff');
+          mkHdr(lb, 'b', '70px', '#f0883e');
+          mkHdr('Delta', 'delta', '54px');
+
+          // Compute pct/delta for sorting
+          const modEntries = modNames.map(mod => {
+            const g = groups[mod];
+            const isUntraced = mod === '__untraced__';
+            const pct = maxMs > 0 ? Math.max(g.total_a, g.total_b) / maxMs * 100 : 0;
+            const delta = g.total_a > 0 ? (g.total_b - g.total_a) / g.total_a * 100
+              : (g.total_b > 0 ? Infinity : 0);
+            return { mod, g, isUntraced, pct, delta };
+          }).filter(e => !(minPct > 0 && e.pct < minPct));
+
+          // Sort (untraced always last)
+          const sortVal = (e) => {
+            if (sortKey === 'pct') return e.pct;
+            if (sortKey === 'a') return e.g.total_a;
+            if (sortKey === 'b') return e.g.total_b;
+            if (sortKey === 'delta') return e.delta === Infinity ? 1e9 : e.delta;
+            return e.pct;
+          };
+          modEntries.sort((a, b) => {
+            if (a.isUntraced !== b.isUntraced) return a.isUntraced ? 1 : -1;
+            const va = sortVal(a), vb = sortVal(b);
+            return sortDir === 'desc' ? vb - va : va - vb;
+          });
+
+          function renderModRow(parentEl, entry) {
+            const { mod, g, isUntraced, pct, delta: rawDelta } = entry;
+            const modLabel = isUntraced ? 'Untraced' : mod;
+            const delta = rawDelta === Infinity ? null : rawDelta;
+            const deltaStr = delta === null ? 'new' : (delta >= 0 ? '+' : '') + delta.toFixed(0) + '%';
+            const dc = delta === null ? '#bc8cff' : abDeltaColor(delta);
+
+            g.kernels.sort((a, b) => Math.max(b.total_ms_a, b.total_ms_b) - Math.max(a.total_ms_a, a.total_ms_b));
+
+            const modDiv = parentEl.append('div').style('margin-bottom', '2px');
+
+            const modRow = modDiv.append('div').classed('ab-kernel-row', true)
+              .style('cursor', 'pointer').style('background', '#161b22')
+              .style('border-left', isUntraced ? '2px solid #484f58' : '2px solid #7ee787');
+
+            const toggle = modRow.append('span').style('min-width', '14px')
+              .style('color', '#8b949e').style('font-size', '10px').text('▶');
+            modRow.append('span').style('flex', '1')
+              .style('color', isUntraced ? '#484f58' : '#7ee787')
+              .style('font-weight', 'bold').style('font-size', '10px')
+              .text(modLabel + ' (' + g.kernels.length + ')')
+              .attr('title', g.path || modLabel);
+            // Comparison bar
+            const barMax = Math.max(...modEntries.map(e => Math.max(e.g.total_a, e.g.total_b)));
+            const barW = 120;
+            const bA = barMax > 0 ? g.total_a / barMax * barW : 0;
+            const bB = barMax > 0 ? g.total_b / barMax * barW : 0;
+            const barSpan = modRow.append('span').style('display', 'inline-flex').style('flex-direction', 'column')
+              .style('gap', '1px').style('min-width', barW + 'px').style('margin', '0 6px');
+            barSpan.append('span').style('height', '4px').style('width', bA + 'px')
+              .style('background', '#58a6ff').style('border-radius', '1px');
+            barSpan.append('span').style('height', '4px').style('width', bB + 'px')
+              .style('background', '#f0883e').style('border-radius', '1px');
+
+            modRow.append('span').style('min-width', '70px').style('text-align', 'right').style('color', '#58a6ff')
+              .text(fmtMs(g.total_a));
+            modRow.append('span').style('min-width', '70px').style('text-align', 'right').style('color', '#f0883e')
+              .text(fmtMs(g.total_b));
+            modRow.append('span').classed('ab-delta', true).style('color', dc).text(deltaStr);
+
+            const detailDiv = modDiv.append('div').style('display', 'none');
+
+            g.kernels.forEach(k => {
+              const kPct = maxMs > 0 ? Math.max(k.total_ms_a, k.total_ms_b) / maxMs * 100 : 0;
+              if (minPct > 0 && kPct < minPct) return;
+
+              const row = detailDiv.append('div').classed('ab-kernel-row', true)
+                .style('padding-left', '28px').style('font-size', '9px');
+
+              const sym = k.side === 'a_only' ? '⊖' : k.side === 'b_only' ? '⊕' : '=';
+              const symColor = k.side === 'a_only' ? '#58a6ff' : k.side === 'b_only' ? '#f0883e' : '#8b949e';
+
+              row.append('span').style('min-width', '14px').style('color', symColor).text(sym);
+              const kPctVal = maxMs > 0 ? Math.max(k.total_ms_a, k.total_ms_b) / maxMs * 100 : 0;
+              row.append('span').style('min-width', '38px').style('text-align', 'right')
+                .style('color', kPctVal > 3 ? '#c9d1d9' : '#484f58').style('font-size', '9px')
+                .text(kPctVal >= 0.1 ? kPctVal.toFixed(1) + '%' : '<0.1%');
+
+              const cleanName = k.name.replace(/void\s+/, '').replace(/<[^>]*>/g, '<…>').replace(/<…>(<…>)/g, '<…>');
+              const shortKName = cleanName.length > 80 ? cleanName.slice(0, 77) + '...' : cleanName;
+              const tipLines = [k.name, '',
+                la + ': ' + (k.instances_a||0) + ' calls × ' + fmtUs(k.avg_us_a||0) + ' avg',
+                lb + ': ' + (k.instances_b||0) + ' calls × ' + fmtUs(k.avg_us_b||0) + ' avg'];
+              row.append('span').style('flex', '1').style('color', symColor)
+                .style('white-space', 'nowrap').style('overflow', 'hidden').style('text-overflow', 'ellipsis')
+                .text(shortKName).attr('title', tipLines.join('\n'));
+
+              row.append('span').style('min-width', '70px').style('text-align', 'right').style('color', '#58a6ff')
+                .text(k.total_ms_a > 0 ? fmtMs(k.total_ms_a) : '—');
+              row.append('span').style('min-width', '70px').style('text-align', 'right').style('color', '#f0883e')
+                .text(k.total_ms_b > 0 ? fmtMs(k.total_ms_b) : '—');
+
+              const dp = k.delta_pct;
+              const ds = dp === null
+                ? (k.total_ms_b > 0 ? 'new' : 'gone')
+                : (dp >= 0 ? '+' : '') + dp.toFixed(0) + '%';
+              const kdc = dp === null ? '#bc8cff' : abDeltaColor(dp);
+              row.append('span').classed('ab-delta', true).style('color', kdc).text(ds);
+            });
+
+            modRow.on('click', () => {
+              const showing = detailDiv.style('display') !== 'none';
+              detailDiv.style('display', showing ? 'none' : 'block');
+              toggle.text(showing ? '▶' : '▼');
+            });
+          }
+
+          modEntries.forEach(e => renderModRow(container, e));
+        }
+        renderKernelBudget('all', 0);
+      }
+
+      // ── Section 3: Dispatch Chains ──
+      const dcData = AB.dispatch_chains;
+      if (dcData && Object.keys(dcData).length > 0) {
+        const dcTitle = el.append('div').style('display', 'flex').style('align-items', 'center')
+          .style('gap', '12px').style('margin-top', '24px');
+        dcTitle.append('span').classed('wl-title', true).style('margin', '0')
+          .text('Dispatch Chains');
+
+        const dcWlNames = Object.keys(dcData);
+        const dcWlTabs = dcTitle.append('div').style('display', 'flex').style('gap', '0');
+        const dcFilter = dcTitle.append('select')
+          .style('background', '#21262d').style('color', '#c9d1d9')
+          .style('border', '1px solid #30363d').style('border-radius', '4px')
+          .style('padding', '2px 6px').style('font-family', 'inherit').style('font-size', '11px');
+        [['all', 'all ops'], ['common', 'common ops'], ['different', 'different ops']].forEach(([v, t]) => {
+          dcFilter.append('option').attr('value', v).text(t);
+        });
+
+        el.append('div').style('font-size', '10px').style('color', '#484f58').style('margin-bottom', '6px')
+          .text('NVTX op → child ops → CUDA runtime → GPU kernels (from nsys correlationId)');
+
+        const dcContainer = el.append('div');
+        let activeDcWl = dcWlNames[0];
+
+        function renderChainSide(parent, chain) {
+          if (!chain) { parent.append('div').style('color', '#484f58').style('font-size', '9px').text('—'); return; }
+          parent.append('div').style('font-size', '8px').style('color', '#484f58').style('margin-bottom', '2px')
+            .text(fmtUs(chain.dur_us) + '  ' + (chain.total_runtime_calls || 0) + ' calls');
+          (chain.children || []).forEach(child => {
+            const cr = parent.append('div').style('font-size', '9px').style('margin-bottom', '1px');
+            cr.append('span').style('color', '#7ee787').text(child.op);
+            cr.append('span').style('color', '#484f58').text('  ' + fmtUs(child.dur_us));
+            (child.calls || []).forEach(c => {
+              const cl = parent.append('div').style('font-size', '8px').style('padding-left', '12px')
+                .style('color', '#8b949e');
+              cl.append('span').text(c.api);
+              if (c.kernel) {
+                const ck = (c.kernel_short || c.kernel).replace(/void\s+/, '').replace(/<[^>]*>/g, '<…>');
+                const short = ck.length > 50 ? ck.slice(0, 47) + '...' : ck;
+                cl.append('span').style('color', '#c9d1d9').text(' → ' + short);
+                cl.append('span').style('color', '#484f58').text(' ' + fmtUs(c.kernel_us));
+              }
+              if (c.memcpy_bytes) {
+                cl.append('span').style('color', '#d29922')
+                  .text(' → memcpy ' + (c.memcpy_bytes / 1e6).toFixed(1) + 'MB ' + fmtUs(c.memcpy_us));
+              }
+            });
+          });
+        }
+
+        function renderDispatchChains(wl, filter) {
+          activeDcWl = wl;
+          dcWlTabs.selectAll('.dc-tab').style('color', function() {
+            return d3.select(this).attr('data-wl') === wl ? '#e6edf3' : '#484f58';
+          }).style('border-bottom', function() {
+            return d3.select(this).attr('data-wl') === wl ? '2px solid #58a6ff' : '2px solid transparent';
+          });
+          dcContainer.html('');
+          const wlData = dcData[wl];
+          if (!wlData) return;
+
+          const entries = Object.values(wlData)
+            .filter(e => {
+              if (filter === 'common') return e.side === 'both' && !e.divergent;
+              if (filter === 'different') return e.side !== 'both' || e.divergent;
+              return true;
+            })
+            .sort((a, b) => {
+              const durA = Math.max((a.a || {}).dur_us || 0, (a.b || {}).dur_us || 0);
+              const durB = Math.max((b.a || {}).dur_us || 0, (b.b || {}).dur_us || 0);
+              return durB - durA;
+            });
+
+          if (!entries.length) {
+            dcContainer.append('div').style('color', '#484f58').style('padding', '8px')
+              .text('No ops match this filter.');
+            return;
+          }
+
+          // Header
+          const hdr = dcContainer.append('div').style('display', 'flex').style('gap', '8px')
+            .style('padding', '4px 8px').style('font-size', '9px').style('color', '#484f58')
+            .style('border-bottom', '1px solid #21262d');
+          hdr.append('span').style('min-width', '14px');
+          hdr.append('span').style('flex', '1').text('Op');
+          hdr.append('span').style('width', '45%').style('color', '#58a6ff').text(la);
+          hdr.append('span').style('width', '45%').style('color', '#f0883e').text(lb);
+
+          entries.forEach(entry => {
+            const opDiv = dcContainer.append('div').style('margin-bottom', '1px');
+            const opRow = opDiv.append('div').style('display', 'flex').style('gap', '8px')
+              .style('padding', '3px 8px').style('cursor', 'pointer').style('font-size', '10px')
+              .style('background', '#161b22').style('border-left',
+                entry.side === 'both' ? '2px solid #7ee787' :
+                entry.side === 'a_only' ? '2px solid #58a6ff' : '2px solid #f0883e');
+
+            const toggle = opRow.append('span').style('min-width', '14px')
+              .style('color', '#8b949e').text('▶');
+            opRow.append('span').style('color', '#bc8cff').style('font-weight', 'bold')
+              .style('flex', '1').text(entry.op);
+            if (entry.divergent) {
+              opRow.append('span').style('color', '#f85149').style('font-size', '9px')
+                .style('font-weight', 'bold').text('DIVERGENT');
+            }
+            const sideTag = entry.side === 'a_only' ? la + ' only' :
+              entry.side === 'b_only' ? lb + ' only' : '';
+            if (sideTag) opRow.append('span').style('color', '#484f58').style('font-size', '9px').text(sideTag);
+
+            const durA = (entry.a || {}).dur_us || 0, durB = (entry.b || {}).dur_us || 0;
+            if (durA) opRow.append('span').style('color', '#58a6ff').style('min-width', '50px')
+              .style('text-align', 'right').text(fmtUs(durA));
+            if (durB) opRow.append('span').style('color', '#f0883e').style('min-width', '50px')
+              .style('text-align', 'right').text(fmtUs(durB));
+
+            // Side-by-side detail
+            const detailDiv = opDiv.append('div').style('display', 'none')
+              .style('margin-left', '14px').style('padding', '4px 0');
+            const cols = detailDiv.append('div').style('display', 'flex').style('gap', '12px');
+            const colA = cols.append('div').style('flex', '1').style('background', '#0d1117')
+              .style('border-left', '2px solid #58a6ff').style('padding', '4px 8px')
+              .style('min-width', '0');
+            const colB = cols.append('div').style('flex', '1').style('background', '#0d1117')
+              .style('border-left', '2px solid #f0883e').style('padding', '4px 8px')
+              .style('min-width', '0');
+            renderChainSide(colA, entry.a);
+            renderChainSide(colB, entry.b);
+
+            opRow.on('click', () => {
+              const showing = detailDiv.style('display') !== 'none';
+              detailDiv.style('display', showing ? 'none' : 'block');
+              toggle.text(showing ? '▼' : '▶');
+            });
+          });
+        }
+
+        dcWlNames.forEach(wl => {
+          dcWlTabs.append('span').classed('dc-tab', true).attr('data-wl', wl)
+            .style('cursor', 'pointer').style('padding', '2px 10px').style('font-size', '11px')
+            .style('font-weight', 'bold').text(wl)
+            .on('click', () => renderDispatchChains(wl, dcFilter.property('value')));
+        });
+        dcFilter.on('change', function() { renderDispatchChains(activeDcWl, this.value); });
+        renderDispatchChains(activeDcWl, 'all');
+      }
+    }
+
+    function abDeltaColor(pct) {
+      if (pct === null || pct === undefined) return '#8b949e';
+      if (pct > 50) return '#f85149';
+      if (pct > 10) return '#f0883e';
+      if (pct > 2) return '#d29922';
+      if (pct < -10) return '#3fb950';
+      if (pct < -2) return '#56d364';
+      return '#8b949e';
+    }
+
+    function abRenderNode(container, node, depth, maxNsys) {
+      const nodeDiv = container.append('div').classed('mt-node', true);
+      // Use nsys timing (ms→µs for display consistency), fall back to profiler gpu_us
+      const na = (node.nsys_ms_a || 0) * 1000, nb = (node.nsys_ms_b || 0) * 1000;
+      const ga = na || (node.gpu_us_a || 0), gb = nb || (node.gpu_us_b || 0);
+      const hasKids = (node.children && node.children.length) || (node.ops && node.ops.length);
+
+      const delta = ga > 0 ? (gb - ga) / ga * 100 : (gb > 0 ? null : 0);
+      const deltaStr = delta === null ? 'new' : (delta >= 0 ? '+' : '') + delta.toFixed(1) + '%';
+      const dColor = delta === null ? '#bc8cff' : abDeltaColor(delta);
+
+      const row = nodeDiv.append('div').classed('ab-row', true)
+        .style('padding-left', depth * 16 + 'px');
+
+      const toggle = row.append('span').classed('mt-toggle', true)
+        .text(hasKids ? (depth < 1 ? '▼' : '▶') : ' ');
+
+      let clsText = node.class || '';
+      if (node.repeat) clsText += ' x' + node.repeat;
+      row.append('span').classed('mt-cls', true).text(clsText);
+
+      const srcTag = na > 0 || nb > 0 ? '' : '';
+      row.append('span').classed('mt-val', true).style('color', '#58a6ff').text(fmtUs(ga) + srcTag);
+      row.append('span').classed('mt-val', true).style('color', '#f0883e').text(fmtUs(gb) + srcTag);
+      row.append('span').classed('ab-delta', true).style('color', dColor).text(ga > 0 || gb > 0 ? deltaStr : '');
+
+      // Bars
+      const barW = 120;
+      const barDiv = row.append('span').style('display', 'inline-flex').style('flex-direction', 'column')
+        .style('gap', '1px').style('min-width', barW + 'px').style('margin-left', '8px');
+
+      if (maxNsys > 0 && (ga > 0 || gb > 0)) {
+        const wA = Math.max(2, ga / maxNsys * barW);
+        const wB = Math.max(2, gb / maxNsys * barW);
+        barDiv.append('div').classed('ab-bar', true)
+          .style('width', wA + 'px').style('background', '#58a6ff');
+        barDiv.append('div').classed('ab-bar', true)
+          .style('width', wB + 'px').style('background', '#f0883e');
+      }
+
+      if (hasKids) {
+        const childDiv = nodeDiv.append('div').classed('mt-children', true)
+          .style('display', depth < 1 ? 'block' : 'none');
+
+        let expanded = depth < 1;
+        let rendered = expanded;
+
+        if (expanded) abRenderChildren(childDiv, node, depth + 1, maxNsys);
+
+        row.on('click', () => {
+          expanded = !expanded;
+          toggle.text(expanded ? '▼' : '▶');
+          childDiv.style('display', expanded ? 'block' : 'none');
+          if (expanded && !rendered) {
+            abRenderChildren(childDiv, node, depth + 1, maxNsys);
+            rendered = true;
+          }
+        });
+      }
+    }
+
+    function abRenderChildren(container, node, depth, maxNsys) {
+      (node.children || []).forEach(child => {
+        abRenderNode(container, child, depth, maxNsys);
+      });
+
+      if (node.ops && node.ops.length) {
+        node.ops.forEach(op => {
+          const hasNsysOp = op.nsys_ms_a || op.nsys_ms_b;
+          const hasGpu = op.gpu_a || op.gpu_b;
+          if (!hasNsysOp && !hasGpu) return;
+
+          const row = container.append('div').classed('ab-kernel-row', true)
+            .style('padding-left', (depth * 16 + 14) + 'px');
+
+          const opName = op.op || '';
+          row.append('span').style('color', '#7ee787').style('min-width', '160px')
+            .text(opName);
+
+          // Show profiler kernel name (clean format), fall back to nsys name
+          const kname = op.gpu_full_a || op.gpu_full_b || op.gpu_a || op.gpu_b || op.nsys_name_a || op.nsys_name_b || '';
+          const shared = op.nsys_shared_a || op.nsys_shared_b;
+          const sharedTag = shared ? ' (/' + shared + ')' : '';
+          const cleanK = kname.replace(/void\s+/, '').replace(/<[^>]*>/g, '<…>').replace(/<…>(<…>)/g, '<…>');
+          const shortK = cleanK.length > 70 ? cleanK.slice(0, 67) + '...' : cleanK;
+          const ktip = [kname];
+          row.append('span').style('flex', '1').style('color', hasNsysOp ? '#c9d1d9' : '#484f58')
+            .style('white-space', 'nowrap').style('overflow', 'hidden').style('text-overflow', 'ellipsis')
+            .text(shortK + sharedTag).attr('title', ktip.join('\n'));
+
+          // Use nsys timing if available, else profiler
+          const da = hasNsysOp ? (op.nsys_ms_a || 0) * 1000 : (op.gpu_dur_us_a || 0);
+          const db = hasNsysOp ? (op.nsys_ms_b || 0) * 1000 : (op.gpu_dur_us_b || 0);
+          row.append('span').style('min-width', '60px').style('text-align', 'right').style('color', '#58a6ff')
+            .text(da ? fmtUs(da) : '—');
+          row.append('span').style('min-width', '60px').style('text-align', 'right').style('color', '#f0883e')
+            .text(db ? fmtUs(db) : '—');
+
+          const dp = da > 0 ? (db - da) / da * 100 : (db > 0 ? null : 0);
+          const ds = dp === null ? 'new' : (dp >= 0 ? '+' : '') + dp.toFixed(1) + '%';
+          const dc = dp === null ? '#bc8cff' : abDeltaColor(dp);
+          row.append('span').classed('ab-delta', true).style('color', dc)
+            .text(da > 0 || db > 0 ? ds : '');
         });
       }
     }

@@ -94,7 +94,7 @@ def main():
     parser.add_argument("--workload-json", type=str, default=None, dest="workload_json",
                         help="Path to workload_data.json — auto-picks Fast/Typical/Slow representatives by latency")
 
-    args = parser.parse_args()
+    args, extra_args = parser.parse_known_args()
 
     # Map general --input-len/--output-len to dataset-specific args
     if args.input_len is not None:
@@ -116,6 +116,21 @@ def main():
     trace_dir = profile_dir / f"profiles-{run_id}"
     trace_dir.mkdir(parents=True, exist_ok=True)
 
+    # Parse extra args (--linear-backend, --moe-backend, etc.) into LLM kwargs
+    extra_kwargs = {}
+    i = 0
+    while i < len(extra_args):
+        if extra_args[i].startswith("--"):
+            key = extra_args[i][2:].replace("-", "_")
+            if i + 1 < len(extra_args) and not extra_args[i + 1].startswith("--"):
+                extra_kwargs[key] = extra_args[i + 1]
+                i += 2
+            else:
+                extra_kwargs[key] = True
+                i += 1
+        else:
+            i += 1
+
     llm = LLM(
         model=args.model,
         enforce_eager=args.enforce_eager,
@@ -129,6 +144,7 @@ def main():
             "torch_profiler_dir": str(trace_dir),
             "torch_profiler_record_shapes": True,
         },
+        **extra_kwargs,
     )
 
     tokenizer = llm.get_tokenizer()
