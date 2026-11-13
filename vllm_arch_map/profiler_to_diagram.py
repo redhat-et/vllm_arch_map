@@ -13,8 +13,22 @@ import copy
 import json
 import gzip
 import statistics
+import subprocess
 import argparse
 from pathlib import Path
+
+
+def _demangle(name):
+    """Demangle C++ kernel names (e.g. _ZN7cutlass... → void cutlass::...)."""
+    if not name.startswith('_Z'):
+        return name
+    try:
+        r = subprocess.run(['c++filt', name], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return name
 
 
 GPU_DTYPES = {"c10::BFloat16", "c10::Half", "c10::Float", "c10::Double",
@@ -79,6 +93,15 @@ def build_correlation_map(cats):
         [e for e in cats.get("kernel", []) if e.get("dur", 0) > 0],
         key=lambda e: e["ts"]
     )
+    # Build sorted cuda_runtime list for multi-kernel discovery.
+    # cuda_runtime events (cudaLaunchKernel etc.) have CPU timestamps,
+    # so they fall within the CPU op's time window even though the GPU
+    # kernels they launch execute asynchronously later.
+    all_runtime = sorted(
+        [e for e in cats.get("cuda_runtime", [])
+         if (e.get("args") or {}).get("correlation") is not None],
+        key=lambda e: e["ts"]
+    )
     _used_kernels = set()
 
     def find_kernel(ext_id, cpu_ts=None, cpu_dur=None):
@@ -100,7 +123,33 @@ def build_correlation_map(cats):
                 _used_kernels.add(id(best))
                 return best
         return None
-    return find_kernel
+
+    def find_all_kernels(ext_id, cpu_ts=None, cpu_dur=None):
+        """Return ALL GPU kernels for a CPU op via cuda_runtime correlation.
+        Scans cuda_runtime events (CPU timestamps) within the CPU op's window
+        and follows their correlations to GPU kernels. This captures kernels
+        from nested C++ dispatch that have different External IDs."""
+        results = []
+        seen_corr = set()
+        # 1. Direct correlation matches for this ext_id
+        for c in ext_to_corrs.get(ext_id, []):
+            if c in corr_to_gpu:
+                results.append(corr_to_gpu[c])
+                seen_corr.add(c)
+        # 2. Scan cuda_runtime events in the CPU time window
+        if cpu_ts is not None and cpu_dur is not None and cpu_dur > 1:
+            cpu_end = cpu_ts + cpu_dur
+            for rt in all_runtime:
+                if rt["ts"] > cpu_end:
+                    break
+                if rt["ts"] >= cpu_ts:
+                    corr = (rt.get("args") or {}).get("correlation")
+                    if corr and corr not in seen_corr and corr in corr_to_gpu:
+                        results.append(corr_to_gpu[corr])
+                        seen_corr.add(corr)
+        return results
+
+    return find_kernel, find_all_kernels
 
 
 def has_gpu_input(args):
@@ -146,7 +195,7 @@ def build_dfs_tree(modules, cpu_ops, find_kernel, main_pid, main_tid):
     return roots
 
 
-def raw_to_module_tree(raw_nodes, find_kernel, seq_start=0):
+def raw_to_module_tree(raw_nodes, find_kernel, seq_start=0, find_all_kernels=None):
     """Convert DFS raw nodes → module_tree format for model_viz.html."""
     children = []
     ops = []
@@ -165,7 +214,8 @@ def raw_to_module_tree(raw_nodes, find_kernel, seq_start=0):
             cls = parts[0] if len(parts) == 2 and parts[1].isdigit() else cls_inst
             inst = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
 
-            sub = raw_to_module_tree(rn["_children"], find_kernel)
+            sub = raw_to_module_tree(rn["_children"], find_kernel,
+                                     find_all_kernels=find_all_kernels)
             mod = {
                 "class": cls,
                 "instance": inst,
@@ -178,7 +228,18 @@ def raw_to_module_tree(raw_nodes, find_kernel, seq_start=0):
         elif e["cat"] == "cpu_op":
             args = e.get("args") or {}
             ext = args.get("External id")
-            kernel = find_kernel(ext, e.get("ts"), e.get("dur")) if ext is not None else None
+
+            all_kerns = []
+            if ext is not None and find_all_kernels:
+                all_kerns = find_all_kernels(ext, e.get("ts"), e.get("dur"))
+            elif ext is not None:
+                k = find_kernel(ext, e.get("ts"), e.get("dur"))
+                if k:
+                    all_kerns = [k]
+            kernel = max(all_kerns, key=lambda k: k.get("dur", 0)) if all_kerns else None
+            if e.get("dur", 0) > 500 and len(rn["_children"]) > 3:
+                print(f"    {e['name']}: dur={e['dur']:.0f}us, find_all={len(all_kerns)}, sub_children={len(rn['_children'])}")
+
             op = {
                 "op": e["name"],
                 "dur_us": round(e["dur"], 1),
@@ -194,21 +255,41 @@ def raw_to_module_tree(raw_nodes, find_kernel, seq_start=0):
                 ]
             # GPU
             if kernel:
-                kname = kernel["name"]
+                kname = _demangle(kernel["name"])
                 short = kname[:80] + "..." if len(kname) > 80 else kname
                 op["gpu"] = short
+                op["gpu_full"] = kname
                 op["gpu_dur_us"] = round(kernel.get("dur", 0), 1)
                 ka = kernel.get("args") or {}
                 op["gpu_role"] = _guess_role(e["name"], kname)
+                if len(all_kerns) > 1:
+                    op["gpu_full_list"] = [_demangle(k["name"]) for k in all_kerns]
             elif has_gpu_input(args):
                 op["gpu_note"] = "GPU tensor metadata (no kernel)"
             else:
                 op["gpu_note"] = "CPU-only"
 
             # Sub-ops from children
-            sub_ops = _build_sub_ops(rn["_children"], find_kernel)
+            sub_ops, sub_kernels = _build_sub_ops(rn["_children"], find_kernel)
             if sub_ops:
                 op["sub_ops"] = sub_ops
+            # Merge sub_op kernels into gpu_full_list
+            if sub_kernels:
+                seen_names = {k["name"] for k in all_kerns}
+                for sk in sub_kernels:
+                    if sk["name"] not in seen_names:
+                        all_kerns.append(sk)
+                        seen_names.add(sk["name"])
+                if len(all_kerns) > 1 and "gpu_full_list" not in op:
+                    if not kernel:
+                        kernel = max(all_kerns, key=lambda k: k.get("dur", 0))
+                        kname = _demangle(kernel["name"])
+                        short = kname[:80] + "..." if len(kname) > 80 else kname
+                        op["gpu"] = short
+                        op["gpu_full"] = kname
+                        op["gpu_dur_us"] = round(kernel.get("dur", 0), 1)
+                        op["gpu_role"] = _guess_role(e["name"], kname)
+                    op["gpu_full_list"] = [_demangle(k["name"]) for k in all_kerns]
 
             ops.append(op)
         seq += 1
@@ -218,6 +299,7 @@ def raw_to_module_tree(raw_nodes, find_kernel, seq_start=0):
 
 def _build_sub_ops(raw_children, find_kernel):
     result = []
+    kernels_found = []
     for rn in raw_children:
         e = rn["_e"]
         if e["cat"] != "cpu_op":
@@ -233,15 +315,17 @@ def _build_sub_ops(raw_children, find_kernel):
             kname = kernel["name"]
             sub["gpu_display"] = kname[:80] + ("..." if len(kname) > 80 else "")
             sub["gpu_dur_us"] = round(kernel.get("dur", 0), 1)
+            kernels_found.append(kernel)
         elif has_gpu_input(args):
             sub["gpu_note"] = "GPU tensor metadata (no kernel)"
         else:
             sub["gpu_note"] = "CPU-only"
-        child_subs = _build_sub_ops(rn["_children"], find_kernel)
+        child_subs, child_kernels = _build_sub_ops(rn["_children"], find_kernel)
         if child_subs:
             sub["sub_ops"] = child_subs
+        kernels_found.extend(child_kernels)
         result.append(sub)
-    return result
+    return result, kernels_found
 
 
 def _guess_role(cpu_name, kernel_name):
@@ -377,7 +461,7 @@ def process_trace(trace_path):
         return None
 
     main_pid, main_tid = find_main_thread(cpu_op_events)
-    find_kernel = build_correlation_map(cats)
+    find_kernel, find_all_kernels = build_correlation_map(cats)
 
     # Module markers: prefer nn.Module: (has class names, collapses properly)
     # Module: from install_recorder used as fallback only if no nn.Module: markers
@@ -391,7 +475,9 @@ def process_trace(trace_path):
     cpu_ops = [e for e in cpu_op_events
                if e["pid"] == main_pid and e["tid"] == main_tid]
 
-    print(f"  {len(events)} events | {len(modules)} modules | {len(cpu_ops)} cpu_ops | {len(cats.get('kernel', []))} kernels")
+    n_rt = len(cats.get("cuda_runtime", []))
+    n_kern = len(cats.get("kernel", []))
+    print(f"  {len(events)} events | {len(modules)} modules | {len(cpu_ops)} cpu_ops | {n_kern} kernels | {n_rt} cuda_runtime")
 
     raw_roots = build_dfs_tree(modules, cpu_ops, find_kernel, main_pid, main_tid)
 
@@ -445,7 +531,8 @@ def process_trace(trace_path):
     parts = cls_inst.rsplit("_", 1)
     root_cls = parts[0] if len(parts) == 2 and parts[1].isdigit() else cls_inst
 
-    sub = raw_to_module_tree(model_root["_children"], find_kernel)
+    sub = raw_to_module_tree(model_root["_children"], find_kernel,
+                             find_all_kernels=find_all_kernels)
     module_tree = {
         "class": root_cls,
         "instance": 0,
