@@ -3006,7 +3006,6 @@
 
               const cleanName = k.name.replace(/void\s+/, '').replace(/<[^>]*>/g, '<…>').replace(/<…>(<…>)/g, '<…>');
               const shortKName = cleanName.length > 80 ? cleanName.slice(0, 77) + '...' : cleanName;
-              // Tooltip: full name + stats
               const tipLines = [k.name, '',
                 la + ': ' + (k.instances_a||0) + ' calls × ' + fmtUs(k.avg_us_a||0) + ' avg',
                 lb + ': ' + (k.instances_b||0) + ' calls × ' + fmtUs(k.avg_us_b||0) + ' avg'];
@@ -3037,6 +3036,151 @@
           modEntries.forEach(e => renderModRow(container, e));
         }
         renderKernelBudget('all', 0);
+      }
+
+      // ── Section 3: Dispatch Chains ──
+      const dcData = AB.dispatch_chains;
+      if (dcData && Object.keys(dcData).length > 0) {
+        const dcTitle = el.append('div').style('display', 'flex').style('align-items', 'center')
+          .style('gap', '12px').style('margin-top', '24px');
+        dcTitle.append('span').classed('wl-title', true).style('margin', '0')
+          .text('Dispatch Chains');
+
+        const dcWlNames = Object.keys(dcData);
+        const dcWlTabs = dcTitle.append('div').style('display', 'flex').style('gap', '0');
+        const dcFilter = dcTitle.append('select')
+          .style('background', '#21262d').style('color', '#c9d1d9')
+          .style('border', '1px solid #30363d').style('border-radius', '4px')
+          .style('padding', '2px 6px').style('font-family', 'inherit').style('font-size', '11px');
+        [['all', 'all ops'], ['common', 'common ops'], ['different', 'different ops']].forEach(([v, t]) => {
+          dcFilter.append('option').attr('value', v).text(t);
+        });
+
+        el.append('div').style('font-size', '10px').style('color', '#484f58').style('margin-bottom', '6px')
+          .text('NVTX op → child ops → CUDA runtime → GPU kernels (from nsys correlationId)');
+
+        const dcContainer = el.append('div');
+        let activeDcWl = dcWlNames[0];
+
+        function renderChainSide(parent, chain) {
+          if (!chain) { parent.append('div').style('color', '#484f58').style('font-size', '9px').text('—'); return; }
+          parent.append('div').style('font-size', '8px').style('color', '#484f58').style('margin-bottom', '2px')
+            .text(fmtUs(chain.dur_us) + '  ' + (chain.total_runtime_calls || 0) + ' calls');
+          (chain.children || []).forEach(child => {
+            const cr = parent.append('div').style('font-size', '9px').style('margin-bottom', '1px');
+            cr.append('span').style('color', '#7ee787').text(child.op);
+            cr.append('span').style('color', '#484f58').text('  ' + fmtUs(child.dur_us));
+            (child.calls || []).forEach(c => {
+              const cl = parent.append('div').style('font-size', '8px').style('padding-left', '12px')
+                .style('color', '#8b949e');
+              cl.append('span').text(c.api);
+              if (c.kernel) {
+                const ck = (c.kernel_short || c.kernel).replace(/void\s+/, '').replace(/<[^>]*>/g, '<…>');
+                const short = ck.length > 50 ? ck.slice(0, 47) + '...' : ck;
+                cl.append('span').style('color', '#c9d1d9').text(' → ' + short);
+                cl.append('span').style('color', '#484f58').text(' ' + fmtUs(c.kernel_us));
+              }
+              if (c.memcpy_bytes) {
+                cl.append('span').style('color', '#d29922')
+                  .text(' → memcpy ' + (c.memcpy_bytes / 1e6).toFixed(1) + 'MB ' + fmtUs(c.memcpy_us));
+              }
+            });
+          });
+        }
+
+        function renderDispatchChains(wl, filter) {
+          activeDcWl = wl;
+          dcWlTabs.selectAll('.dc-tab').style('color', function() {
+            return d3.select(this).attr('data-wl') === wl ? '#e6edf3' : '#484f58';
+          }).style('border-bottom', function() {
+            return d3.select(this).attr('data-wl') === wl ? '2px solid #58a6ff' : '2px solid transparent';
+          });
+          dcContainer.html('');
+          const wlData = dcData[wl];
+          if (!wlData) return;
+
+          const entries = Object.values(wlData)
+            .filter(e => {
+              if (filter === 'common') return e.side === 'both' && !e.divergent;
+              if (filter === 'different') return e.side !== 'both' || e.divergent;
+              return true;
+            })
+            .sort((a, b) => {
+              const durA = Math.max((a.a || {}).dur_us || 0, (a.b || {}).dur_us || 0);
+              const durB = Math.max((b.a || {}).dur_us || 0, (b.b || {}).dur_us || 0);
+              return durB - durA;
+            });
+
+          if (!entries.length) {
+            dcContainer.append('div').style('color', '#484f58').style('padding', '8px')
+              .text('No ops match this filter.');
+            return;
+          }
+
+          // Header
+          const hdr = dcContainer.append('div').style('display', 'flex').style('gap', '8px')
+            .style('padding', '4px 8px').style('font-size', '9px').style('color', '#484f58')
+            .style('border-bottom', '1px solid #21262d');
+          hdr.append('span').style('min-width', '14px');
+          hdr.append('span').style('flex', '1').text('Op');
+          hdr.append('span').style('width', '45%').style('color', '#58a6ff').text(la);
+          hdr.append('span').style('width', '45%').style('color', '#f0883e').text(lb);
+
+          entries.forEach(entry => {
+            const opDiv = dcContainer.append('div').style('margin-bottom', '1px');
+            const opRow = opDiv.append('div').style('display', 'flex').style('gap', '8px')
+              .style('padding', '3px 8px').style('cursor', 'pointer').style('font-size', '10px')
+              .style('background', '#161b22').style('border-left',
+                entry.side === 'both' ? '2px solid #7ee787' :
+                entry.side === 'a_only' ? '2px solid #58a6ff' : '2px solid #f0883e');
+
+            const toggle = opRow.append('span').style('min-width', '14px')
+              .style('color', '#8b949e').text('▶');
+            opRow.append('span').style('color', '#bc8cff').style('font-weight', 'bold')
+              .style('flex', '1').text(entry.op);
+            if (entry.divergent) {
+              opRow.append('span').style('color', '#f85149').style('font-size', '9px')
+                .style('font-weight', 'bold').text('DIVERGENT');
+            }
+            const sideTag = entry.side === 'a_only' ? la + ' only' :
+              entry.side === 'b_only' ? lb + ' only' : '';
+            if (sideTag) opRow.append('span').style('color', '#484f58').style('font-size', '9px').text(sideTag);
+
+            const durA = (entry.a || {}).dur_us || 0, durB = (entry.b || {}).dur_us || 0;
+            if (durA) opRow.append('span').style('color', '#58a6ff').style('min-width', '50px')
+              .style('text-align', 'right').text(fmtUs(durA));
+            if (durB) opRow.append('span').style('color', '#f0883e').style('min-width', '50px')
+              .style('text-align', 'right').text(fmtUs(durB));
+
+            // Side-by-side detail
+            const detailDiv = opDiv.append('div').style('display', 'none')
+              .style('margin-left', '14px').style('padding', '4px 0');
+            const cols = detailDiv.append('div').style('display', 'flex').style('gap', '12px');
+            const colA = cols.append('div').style('flex', '1').style('background', '#0d1117')
+              .style('border-left', '2px solid #58a6ff').style('padding', '4px 8px')
+              .style('min-width', '0');
+            const colB = cols.append('div').style('flex', '1').style('background', '#0d1117')
+              .style('border-left', '2px solid #f0883e').style('padding', '4px 8px')
+              .style('min-width', '0');
+            renderChainSide(colA, entry.a);
+            renderChainSide(colB, entry.b);
+
+            opRow.on('click', () => {
+              const showing = detailDiv.style('display') !== 'none';
+              detailDiv.style('display', showing ? 'none' : 'block');
+              toggle.text(showing ? '▼' : '▶');
+            });
+          });
+        }
+
+        dcWlNames.forEach(wl => {
+          dcWlTabs.append('span').classed('dc-tab', true).attr('data-wl', wl)
+            .style('cursor', 'pointer').style('padding', '2px 10px').style('font-size', '11px')
+            .style('font-weight', 'bold').text(wl)
+            .on('click', () => renderDispatchChains(wl, dcFilter.property('value')));
+        });
+        dcFilter.on('change', function() { renderDispatchChains(activeDcWl, this.value); });
+        renderDispatchChains(activeDcWl, 'all');
       }
     }
 

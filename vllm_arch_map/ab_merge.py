@@ -333,6 +333,10 @@ def main():
                         help="ab_bench.json from ab_bench.py (latency metrics)")
     parser.add_argument("--label-a", default=None)
     parser.add_argument("--label-b", default=None)
+    parser.add_argument("--dispatch-dir", default=None,
+                        help="Directory with dispatch_chain_<backend>_<workload>.json files")
+    parser.add_argument("--model-name", default=None,
+                        help="Model name (e.g. nvidia/Qwen3-30B-A3B-NVFP4)")
     parser.add_argument("-o", "--output", default="ab_compare.json")
     args = parser.parse_args()
 
@@ -395,7 +399,7 @@ def main():
         "type": "ab_compare",
         "label_a": label_a,
         "label_b": label_b,
-        "model": pa["merged_tree"].get("class", ""),
+        "model": args.model_name or pa["merged_tree"].get("class", ""),
         "total_gpu_us_a": round(total_gpu_a, 1),
         "total_gpu_us_b": round(total_gpu_b, 1),
         "total_nsys_ms_a": round(total_nsys_a, 2),
@@ -410,6 +414,50 @@ def main():
 
     if bench:
         output["bench"] = bench.get("workloads", {})
+
+    if args.dispatch_dir:
+        import glob
+        dc_files = glob.glob(str(Path(args.dispatch_dir) / "dispatch_chain_*.json"))
+        wl_chains = {}
+        for fp in dc_files:
+            stem = Path(fp).stem.replace("dispatch_chain_", "")
+            parts = stem.rsplit("_", 1)
+            if len(parts) != 2:
+                continue
+            backend, workload = parts
+            if workload not in wl_chains:
+                wl_chains[workload] = {}
+            with open(fp) as f:
+                wl_chains[workload][backend] = json.load(f)
+
+        dispatch_workloads = {}
+        for wl, backends in sorted(wl_chains.items()):
+            chains_a = backends.get(label_a, {})
+            chains_b = backends.get(label_b, {})
+            all_ops = set(chains_a.keys()) | set(chains_b.keys())
+            diff = {}
+            for op in sorted(all_ops):
+                ca, cb = chains_a.get(op), chains_b.get(op)
+                entry = {"op": op}
+                if ca and cb:
+                    entry["side"] = "both"
+                    entry["a"] = ca
+                    entry["b"] = cb
+                    kids_a = {c["op"] for c in ca.get("children", [])}
+                    kids_b = {c["op"] for c in cb.get("children", [])}
+                    if kids_a != kids_b:
+                        entry["divergent"] = True
+                elif ca:
+                    entry["side"] = "a_only"
+                    entry["a"] = ca
+                else:
+                    entry["side"] = "b_only"
+                    entry["b"] = cb
+                diff[op] = entry
+            dispatch_workloads[wl] = diff
+            common = sum(1 for e in diff.values() if e["side"] == "both")
+            print(f"  dispatch {wl}: {len(diff)} ops ({common} common, {len(diff)-common} unique)")
+        output["dispatch_chains"] = dispatch_workloads
 
     output = _sanitize(output)
 

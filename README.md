@@ -103,7 +103,7 @@ PATH D: A/B Backend Compare (e.g. cutlass vs flashinfer_b12x)
 | `ab_nsys.py` | A/B nsys profiling. Runs one server+nsys cycle **per workload per config** (6 server starts for 3 workloads × 2 configs). Each sqlite contains only that workload's kernels — no timestamp splitting needed |
 | `ab_merge.py` | Merges profiler module tree (traced dispatch) + nsys kernel timing + bench metrics into `ab_compare.json`. Kernel name normalization bridges torch.profiler↔nsys formatting differences |
 | `diff_kernels.py` | Loads two nsys sqlite files, merges kernel stats into A/B diff table sorted by max time. Extracts CPU-side overhead (memcpy, CUDA runtime API, sync) from nsys |
-| `extract_structural_map.py` | Extracts op→kernel structural map from nsys sqlite with NVTX annotations. One-time capture per model — structure is static |
+| `extract_dispatch_chain.py` | Extracts full NVTX op→child ops→CUDA runtime→GPU kernel dispatch chain from nsys sqlite. Uses correlationId for exact GPU linkage. Supports A/B diff mode |
 | `model_viz.html` | D3.js single-page viewer with 4 tabs. Loads JSON files. All data-driven, works for any model/GPU |
 
 ### What each data source provides
@@ -126,7 +126,7 @@ PATH D: A/B Backend Compare (e.g. cutlass vs flashinfer_b12x)
 
 ## Key Capabilities
 
-* **Structural Mapping**: Extracts model architectures (embeddings, attention blocks, MLP, MoE routers) and tracks tensor shapes, dtypes, and module hierarchy.
+* **Dispatch Chain**: Extracts full NVTX→RUNTIME→KERNEL dispatch chains from nsys using correlationId. Shows exactly which GPU kernels each PyTorch op dispatches.
 * **Hardware Execution Tracing**: Maps every CPU op to its GPU kernel dispatch — shows cuBLAS GEMM, FlashAttention, fused kernels, and metadata-only ops.
 * **Bottleneck Detection**: Duration bars colored green→red by percentage of parent time. Per-layer variance charts highlight outlier layers.
 * **Interactive Drill-Down**: Click any module to expand in-place. Hover for CPU→GPU dispatch chain with input shapes and kernel names.
@@ -177,7 +177,6 @@ vllm_arch_map/
     ├── ab_merge.py
     ├── ab_nsys.py
     ├── diff_kernels.py
-    ├── extract_structural_map.py
     ├── flow_support.py
     ├── ncu_profile.py
     ├── parse_workload.py
@@ -349,11 +348,12 @@ python vllm_arch_map/ab_merge.py \
     traces/profiler/b12x/per_request_profiles.json \
     --kernel-diff traces/ab/nsys/kernel_diff_all.json \
     --bench traces/ab/ab_bench.json \
-    --label-a cutlass --label-b b12x \
+    --dispatch-dir traces/ab/ \
+    --model-name "nvidia/Qwen3-30B-A3B-NVFP4" \
     -o samples/ab_compare.json
 ```
 
-**Step 5: View (can be also on local machine)**
+**Step 5: View (local machine)**
 
 ```bash
 python3 -m http.server 8765 --directory samples
@@ -361,31 +361,38 @@ open http://localhost:8765/model_viz.html
 # → auto-detects ab_compare.json and shows A/B Compare tab
 ```
 
-### Structural Map (op→kernel, one-time per model)
+### Dispatch Chain (NVTX→RUNTIME→KERNEL, one-time per model)
 
-Captures the static mapping from PyTorch ops to GPU kernels using NVTX annotations.
-Run once per model — the op→kernel structure doesn't change between runs.
+Extracts the full dispatch chain from NVTX ops through CUDA runtime calls to GPU kernels
+using correlationId for exact attribution. Run once per model — the dispatch structure
+doesn't change between runs.
 
 Requires nsys captures with `--pytorch=autograd-nvtx` (already set in `utils.py`).
 The A/B nsys step (`ab_nsys.py`) produces these automatically.
 
 ```bash
-# Extract from a single nsys sqlite (any workload works)
-python vllm_arch_map/extract_structural_map.py \
-    traces/ab/nsys/cutlass_prefill.sqlite \
-    -o samples/structural_map.json
+# Extract from a single nsys sqlite (any workload works).
+for f in traces/ab/nsys/*.sqlite; do
+    name=$(basename "$f" .sqlite)
+    python vllm_arch_map/extract_dispatch_chain.py "$f" -o "traces/ab/dispatch_chain_${name}.json"
+done
 
-# Or merge from multiple captures for broader coverage
-python vllm_arch_map/extract_structural_map.py \
+# Or filter by op name
+python vllm_arch_map/extract_dispatch_chain.py \
     traces/ab/nsys/cutlass_prefill.sqlite \
-    -o samples/structural_map.json
-# Repeat for other sqlites, then merge manually or use one prefill capture
-# (prefill has the widest kernel variety)
+    --op "flashinfer" -o samples/dispatch_chain.json
+
+# A/B diff mode — compare dispatch paths between backends
+python vllm_arch_map/extract_dispatch_chain.py \
+    traces/ab/nsys/cutlass_prefill.sqlite \
+    traces/ab/nsys/b12x_prefill.sqlite \
+    --diff --label-a cutlass --label-b b12x \
+    -o samples/dispatch_diff.json
 ```
 
-Output groups ops by namespace (`vllm_ops`, `aten_ops`, `other_ops`), each mapping
-op name → list of kernel types dispatched. Example: `vllm::moe_forward` → 11 kernels
-(topkGating, cvt_fp16_to_fp4, GEMM ×2, doActivation, finalizeMoeRouting, etc.).
+Output shows the full chain per op: NVTX parent → child aten ops → CUDA runtime calls →
+GPU kernels/memcpy with durations. Example: `vllm::flashinfer_mm_fp4` → `aten::to` →
+`cudaLaunchKernel` → `unrolled_elementwise_kernel (42.1us)`.
 
 **Coverage note:** NVTX covers ops that go through the PyTorch dispatcher.
 Torch.compile fusions, GEMM shape specializations, and CUDA graph replayed kernels
