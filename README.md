@@ -454,6 +454,22 @@ Decoder layer detail:
 Kernel drill-down:
 ![Kernel detail](./docs/images/qwen3_3.png)
 
+### A/B Compare:
+![A/B Compare](./docs/images/a_b_compare_1.png)
+![A/B Compare](./docs/images/a_b_compare_2.png)
+![A/B Compare](./docs/images/a_b_compare_3.png)
+
+You can see:
+1. Summary Cards — nsys GPU totals (A vs B), delta, kernel count. Tabbed workload card shows GPU time, launch count, memcpy,
+    sync, and top CUDA Runtime API calls per workload (prefill/decode/mix)
+2. Workload Metrics — End-to-end latency from vllm bench serve (no profiling overhead). TTFT, TPOT, ITL, throughput with A/B
+    delta
+3. Module Tree — Module→kernel dispatch traced via torch.profiler, timing from nsys. Shows the nn.Module hierarchy with A/B
+    GPU time at each level
+4. Module Kernel Budget — GPU kernel time grouped by module. Maps nsys kernels back to their nn.Module origin — shows what
+    replaced what between backends
+5. Dispatch Chains — Full NVTX op→child ops→CUDA runtime→GPU kernel chain from nsys correlationId. Side-by-side A/B comparison
+    per workload. Highlights DIVERGENT ops where backends dispatch different kernels.
 ## Roadmap
 
 - [x] Model tree extraction (`walk_model.py` → `model_tree.json`)
