@@ -123,15 +123,15 @@ def main():
 
     # Step 1: A/B benchmark (clean metrics, no profiling overhead)
     bench_cmd = [py, str(script_dir / "ab_bench.py")] + shared_cmd
-    # if not run(bench_cmd, "Step 1: A/B benchmark metrics (TTFT, TPOT, throughput)"):
-    #     sys.exit(1)
+    if not run(bench_cmd, "Step 1: A/B benchmark metrics (TTFT, TPOT, throughput)"):
+        sys.exit(1)
 
-    # # Step 2: A/B nsys
-    # nsys_cmd = [py, str(script_dir / "ab_nsys.py")] + shared_cmd
-    # if not run(nsys_cmd, "Step 2: A/B nsys profiling"):
-    #     sys.exit(1)
+    # Step 2: A/B nsys
+    nsys_cmd = [py, str(script_dir / "ab_nsys.py")] + shared_cmd
+    if not run(nsys_cmd, "Step 2: A/B nsys profiling"):
+        sys.exit(1)
 
-    # # # Step 3: Extract dispatch chains
+    # Step 3: Extract dispatch chains
     nsys_dir = output_dir / "nsys"
     for sqlite in sorted(nsys_dir.glob("*.sqlite")):
         name = sqlite.stem
@@ -150,7 +150,7 @@ def main():
         ab_meta = {}
         label_a, label_b = "A", "B"
 
-    # # Step 4: Profile backend B for shapes
+    # Step 4: Profile backend B for shapes
     profile_b_dir = output_dir / "profile_b"
     shapes_path = profile_b_dir / "per_request_profiles.json"
     if args.config:
@@ -197,7 +197,7 @@ def main():
              "--out_dir", str(profile_b_dir)],
             "Step 4b: Extract shapes from traces")
 
-    # # Step 5: Classify regressions
+    # Step 5: Classify regressions
     kdiff_path = nsys_dir / "kernel_diff_all.json"
     report_path = output_dir / "ab_regression_report.json"
     if kdiff_path.exists():
@@ -211,7 +211,7 @@ def main():
             classify_cmd += ["--shapes", str(shapes_path)]
         run(classify_cmd, "Step 5: Classify regressions")
 
-    # # Step 6: NCU on B-specific kernels only
+    # Step 6: NCU on B-specific kernels only
     if args.ncu and report_path.exists():
         with open(report_path) as f:
             report = json.load(f)
@@ -236,7 +236,6 @@ def main():
                 elif base:
                     filters.add(base)
             kernel_regex = "|".join(sorted(filters))
-            #kernel_regex = "flashinfer" #TODO: we want to take this from the kenrel names in the report instead of hardcoding it here
             model = ab_meta.get("model", args.model)
 
             if args.config:
