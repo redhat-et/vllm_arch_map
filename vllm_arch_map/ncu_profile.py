@@ -19,14 +19,14 @@ Usage:
   python ncu_profile.py Qwen/Qwen3-8B --workload-json samples/workload_data.json
 
 Wrap with ncu:
-  PYTHON_PATH=$(which python)
-  systemd-run --user --scope -p MemoryMax=80G \\
-  sudo /usr/local/cuda/bin/ncu \\
-    --profile-from-start 0 --target-processes application-only \\
-    --kernel-name "regex:flash_fwd_splitkv|elementwise_kernel" \\
-    --set full --nvtx -f \\
-    -o ~/lkesem/vllm_arch_map/traces/ab/ncu_fa_prefill \\
-    $PYTHON_PATH ncu_profile.py Qwen/Qwen3-8B \\
+PYTHON_PATH=$(which python)
+systemd-run --user --scope -p MemoryMax=80G \
+  /usr/local/cuda/bin/ncu \
+    --profile-from-start 0 --target-processes application-only \
+    --kernel-name "regex:flash_fwd_splitkv|elementwise_kernel" \
+    --set full --nvtx -f \
+    -o ~/lkesem/vllm_arch_map/traces/ab/ncu_fa_prefill \
+    "$PYTHON_PATH" vllm_arch_map/ncu_profile.py Qwen/Qwen3-8B \
     --attention-backend FLASH_ATTN --input-len 1024 --output-len 1
 """
 import argparse
@@ -82,7 +82,7 @@ def main():
     parser.add_argument("--output-len", type=int, default=None,
                         help="Maps to --random-output-len")
 
-    args = parser.parse_args()
+    args, extra_args = parser.parse_known_args()
 
     if args.input_len is not None:
         for attr in ('random_input_len', 'sonnet_input_len'):
@@ -100,11 +100,26 @@ def main():
     if args.attention_backend:
         os.environ["VLLM_ATTENTION_BACKEND"] = args.attention_backend
 
+    extra_kwargs = {}
+    i = 0
+    while i < len(extra_args):
+        if extra_args[i].startswith("--"):
+            key = extra_args[i][2:].replace("-", "_")
+            if i + 1 < len(extra_args) and not extra_args[i + 1].startswith("--"):
+                extra_kwargs[key] = extra_args[i + 1]
+                i += 2
+            else:
+                extra_kwargs[key] = True
+                i += 1
+        else:
+            i += 1
+
     llm_kwargs = dict(
         model=args.model,
         max_model_len=args.max_model_len,
-        enforce_eager=True,
+        enforce_eager=extra_kwargs.pop("enforce_eager", True),
         gpu_memory_utilization=args.gpu_memory_utilization,
+        **extra_kwargs,
     )
 
     print(f"[ncu_profile] Loading {args.model}...")
@@ -144,6 +159,8 @@ def main():
     # Warmup outside profiling window
     print("[ncu_profile] Warmup...")
     llm.generate(["Hello"], SamplingParams(max_tokens=args.warmup_tokens, temperature=0))
+    torch.cuda.synchronize()
+
     print("[ncu_profile] Warmup done.")
 
     # Profile window
@@ -152,7 +169,7 @@ def main():
 
     params = [SamplingParams(max_tokens=mt, temperature=0) for mt in max_tokens_per_req]
     outputs = llm.generate(prompts, params)
-
+    torch.cuda.synchronize()
     torch.cuda.cudart().cudaProfilerStop()
     print("[ncu_profile] cudaProfilerStop — ncu capture ends")
 
